@@ -281,16 +281,12 @@ def collect_python_types_for_values(
 
 
 def build_input_field_metadata(input_definition: DynamicInputDefinition) -> Field:
-    if not input_definition.has_default_value:
-        return Field()
-    default_value = input_definition.default_value
-    field_metadata_params = {}
-    if default_holds_compound_object(default_value=default_value):
-        field_metadata_params["default_factory"] = lambda: deepcopy(default_value)
-    else:
-        field_metadata_params["default"] = default_value
-    field_metadata = Field(**field_metadata_params)
-    return field_metadata
+    if input_definition.has_default_value:
+        default_value = input_definition.default_value
+        if isinstance(default_value, (list, dict, set)):
+            return Field(default_factory=lambda: deepcopy(default_value))
+        return Field(default=default_value)
+    return Field()
 
 
 def default_holds_compound_object(default_value: Any) -> bool:
