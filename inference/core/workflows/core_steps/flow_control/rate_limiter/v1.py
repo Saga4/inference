@@ -118,21 +118,23 @@ class RateLimiterBlockV1(WorkflowBlock):
         video_reference_image: Optional[WorkflowImageData] = None,
     ) -> BlockResult:
         current_time = datetime.now()
-        try:
-            metadata = video_reference_image.video_metadata
-            current_time = datetime.fromtimestamp(
-                1 / metadata.fps * metadata.frame_number
-            )
-        except Exception:
-            # reference not passed, metadata not set, or not a video frame
-            pass
 
-        should_throttle = False
-        if self._last_executed_at is not None:
-            should_throttle = (
-                current_time - self._last_executed_at
-            ).total_seconds() < cooldown_seconds
-        if should_throttle:
+        if video_reference_image is not None:
+            try:
+                metadata = video_reference_image.video_metadata
+                current_time = datetime.fromtimestamp(
+                    metadata.frame_number / metadata.fps
+                )
+            except Exception:
+                # In case of any exception, current_time will remain set to datetime.now()
+                pass
+
+        if (
+            self._last_executed_at is not None
+            and (current_time - self._last_executed_at).total_seconds()
+            < cooldown_seconds
+        ):
             return FlowControl(mode="terminate_branch")
+
         self._last_executed_at = current_time
         return FlowControl(mode="select_step", context=next_steps)
