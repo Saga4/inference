@@ -266,18 +266,18 @@ def collect_python_types_for_values(
     input_name: str,
     input_definition: DynamicInputDefinition,
 ) -> List[type]:
-    result = []
-    for value_type_name in input_definition.value_types:
-        if value_type_name not in PYTHON_TYPES_MAPPING:
-            raise DynamicBlockError(
-                public_message=f"Could not resolve Python type `{value_type_name}` declared for input `{input_name}` "
-                f"of dynamic block `{block_type}` within types that would be recognised by Execution "
-                f"Engine knowing the following types: {list(PYTHON_TYPES_MAPPING.keys())}.",
-                context="workflow_compilation | dynamic_block_compilation | manifest_compilation",
-            )
-        value_type = PYTHON_TYPES_MAPPING[value_type_name]
-        result.append(value_type)
-    return result
+    try:
+        return [
+            PYTHON_TYPES_MAPPING[value_type_name]
+            for value_type_name in input_definition.value_types
+        ]
+    except KeyError as e:
+        raise DynamicBlockError(
+            public_message=f"Could not resolve Python type `{e.args[0]}` declared for input `{input_name}` "
+            f"of dynamic block `{block_type}` within types that would be recognised by Execution "
+            f"Engine knowing the following types: {list(PYTHON_TYPES_MAPPING.keys())}.",
+            context="workflow_compilation | dynamic_block_compilation | manifest_compilation",
+        ) from e
 
 
 def build_input_field_metadata(input_definition: DynamicInputDefinition) -> Field:
