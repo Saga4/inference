@@ -307,17 +307,27 @@ def build_outputs_definitions(
     kinds_lookup: Dict[str, Kind],
 ) -> List[OutputDefinition]:
     result = []
+    append_output = result.append  # Local binding to avoid attribute lookups
+    wildcard_kind = [WILDCARD_KIND]
+
     for name, definition in outputs.items():
         if not definition.kind:
-            result.append(OutputDefinition(name=name, kind=[WILDCARD_KIND]))
+            append_output(OutputDefinition(name=name, kind=wildcard_kind))
         else:
-            actual_kinds = collect_actual_kinds_for_output(
-                block_type=block_type,
-                output_name=name,
-                output=definition,
-                kinds_lookup=kinds_lookup,
-            )
-            result.append(OutputDefinition(name=name, kind=actual_kinds))
+            actual_kinds = [
+                kinds_lookup.get(
+                    kind_name,
+                    DynamicBlockError(
+                        public_message=f"Could not find kind with name `{kind_name}` declared for output `{name}` "
+                        f"of dynamic block `{block_type}` within kinds that would be recognised by Execution "
+                        f"Engine knowing the following kinds: {list(kinds_lookup.keys())}.",
+                        context="workflow_compilation | dynamic_block_compilation | manifest_compilation",
+                    ),
+                )
+                for kind_name in definition.kind
+            ]
+            append_output(OutputDefinition(name=name, kind=actual_kinds))
+
     return result
 
 
