@@ -34,11 +34,10 @@ def masks2poly(masks: np.ndarray) -> List[np.ndarray]:
     Returns:
         list: A list of segments, where each segment is obtained by converting the corresponding mask.
     """
-    segments = []
     masks = (masks * 255.0).astype(np.uint8)
-    for mask in masks:
-        segments.append(mask2poly(mask))
-    return segments
+
+    # Utilize list comprehension and map function for faster iteration
+    return list(map(mask2poly, masks))
 
 
 def masks2multipoly(masks: np.ndarray) -> List[np.ndarray]:
@@ -67,11 +66,10 @@ def mask2poly(mask: np.ndarray) -> np.ndarray:
     Returns:
         np.ndarray: Contours represented as a float32 array.
     """
-    contours = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if contours:
-        contours = np.array(
-            contours[np.array([len(x) for x in contours]).argmax()]
-        ).reshape(-1, 2)
+        max_contour = max(contours, key=len)
+        contours = np.array(max_contour).reshape(-1, 2)
     else:
         contours = np.zeros((0, 2))
     return contours.astype("float32")
