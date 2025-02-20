@@ -87,12 +87,13 @@ def mask2multipoly(mask: np.ndarray) -> np.ndarray:
     Returns:
         np.ndarray: Contours represented as a float32 array.
     """
-    contours = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]
-    if contours:
-        contours = [c.reshape(-1, 2).astype("float32") for c in contours]
-    else:
-        contours = [np.zeros((0, 2)).astype("float32")]
-    return contours
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    if not contours:
+        return [np.zeros((0, 2), dtype="float32")]
+
+    # Use list comprehension to extract and convert contours
+    return [contour.astype("float32").reshape(-1, 2) for contour in contours]
 
 
 def post_process_bboxes(
