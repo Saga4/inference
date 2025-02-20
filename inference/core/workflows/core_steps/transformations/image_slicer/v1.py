@@ -155,10 +155,6 @@ def generate_offsets(
     overlap_ratio_wh: Optional[Tuple[float, float]],
 ) -> np.ndarray:
     """
-    Original code: https://github.com/roboflow/supervision/blob/5123085037ec594524fc8f9d9b71b1cd9f487e8d/supervision/detection/tools/inference_slicer.py#L204-L203
-    to avoid fragile contract with supervision, as this function is not element of public
-    API.
-
     Generate offset coordinates for slicing an image based on the given resolution,
     slice dimensions, and overlap ratios.
 
@@ -188,9 +184,14 @@ def generate_offsets(
     overlap_height = int(overlap_ratio_wh[1] * slice_height)
     width_stride = slice_width - overlap_width
     height_stride = slice_height - overlap_height
-    ws = np.arange(0, image_width, width_stride)
-    hs = np.arange(0, image_height, height_stride)
-    xmin, ymin = np.meshgrid(ws, hs)
-    xmax = np.clip(xmin + slice_width, 0, image_width)
-    ymax = np.clip(ymin + slice_height, 0, image_height)
-    return np.stack([xmin, ymin, xmax, ymax], axis=-1).reshape(-1, 4)
+
+    ws = range(0, image_width, width_stride)
+    hs = range(0, image_height, height_stride)
+
+    slices = [
+        (x, y, min(x + slice_width, image_width), min(y + slice_height, image_height))
+        for y in hs
+        for x in ws
+    ]
+
+    return np.array(slices)
