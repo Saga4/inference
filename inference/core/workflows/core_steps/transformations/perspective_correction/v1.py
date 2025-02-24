@@ -222,25 +222,34 @@ def extend_perspective_polygon(
     bbox_position: Optional[sv.Position],
 ) -> np.ndarray:
     if not bbox_position:
-        return polygon
-    points = detections.get_anchors_coordinates(anchor=bbox_position)
-    bottom_left, top_left, top_right, bottom_right = polygon
-    for x, y in points:
-        bottom_left = min(x, bottom_left[0]), bottom_left[1]
-        top_left = min(x, top_left[0]), top_left[1]
-        top_right = max(x, top_right[0]), top_right[1]
-        bottom_right = max(x, bottom_right[0]), bottom_right[1]
+        return np.array(polygon)
 
-        bottom_left = bottom_left[0], max(y, bottom_left[1])
-        bottom_right = bottom_right[0], max(y, bottom_right[1])
-        top_right = top_right[0], min(y, top_right[1])
-        top_left = top_left[0], min(y, top_left[1])
+    points = detections.get_anchors_coordinates(anchor=bbox_position)
+    bottom_left_x, bottom_left_y = polygon[0]
+    top_left_x, top_left_y = polygon[1]
+    top_right_x, top_right_y = polygon[2]
+    bottom_right_x, bottom_right_y = polygon[3]
+
+    for x, y in points:
+        if x < bottom_left_x:
+            bottom_left_x = x
+            top_left_x = x
+        if x > top_right_x:
+            top_right_x = x
+            bottom_right_x = x
+        if y < top_right_y:
+            top_right_y = y
+            top_left_y = y
+        if y > bottom_right_y:
+            bottom_right_y = y
+            bottom_left_y = y
+
     return np.array(
         [
-            bottom_left,
-            top_left,
-            top_right,
-            bottom_right,
+            [bottom_left_x, bottom_left_y],
+            [top_left_x, top_left_y],
+            [top_right_x, top_right_y],
+            [bottom_right_x, bottom_right_y],
         ]
     )
 
