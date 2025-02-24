@@ -881,35 +881,52 @@ class OnnxRoboflowInferenceModel(RoboflowInferenceModel):
         disable_preproc_grayscale: bool = False,
         disable_preproc_static_crop: bool = False,
     ) -> Tuple[np.ndarray, Tuple[int, int]]:
-        if isinstance(image, list):
-            preproc_image = partial(
-                self.preproc_image,
-                disable_preproc_auto_orient=disable_preproc_auto_orient,
-                disable_preproc_contrast=disable_preproc_contrast,
-                disable_preproc_grayscale=disable_preproc_grayscale,
-                disable_preproc_static_crop=disable_preproc_static_crop,
-            )
-            imgs_with_dims = self.image_loader_threadpool.map(preproc_image, image)
-            imgs, img_dims = zip(*imgs_with_dims)
-            if isinstance(imgs[0], np.ndarray):
-                img_in = np.concatenate(imgs, axis=0)
-            elif "torch" in dir():
-                img_in = torch.cat(imgs, dim=0)
-            else:
-                raise ValueError(
-                    f"Received a list of images of unknown type, {type(imgs[0])}; "
-                    "This is most likely a bug. Contact Roboflow team through github issues "
-                    "(https://github.com/roboflow/inference/issues) providing full context of the problem"
-                )
-        else:
-            img_in, img_dims = self.preproc_image(
+        
+     # Fast path for single image
+        if not isinstance(image, list):
+            return self.preproc_image(
                 image,
                 disable_preproc_auto_orient=disable_preproc_auto_orient,
                 disable_preproc_contrast=disable_preproc_contrast,
                 disable_preproc_grayscale=disable_preproc_grayscale,
                 disable_preproc_static_crop=disable_preproc_static_crop,
             )
-            img_dims = [img_dims]
+        
+        # Use partial function to create a callable with fixed parameters for map
+        preproc_func = partial(
+            self.preproc_image,
+            disable_preproc_auto_orient=disable_preproc_auto_orient,
+            disable_preproc_contrast=disable_preproc_contrast,
+            disable_preproc_grayscale=disable_preproc_grayscale,
+            disable_preproc_static_crop=disable_preproc_static_crop,
+        )
+        
+        # Process images in parallel
+        batch_size = len(image)
+        if batch_size > 16:  # Only use parallel processing for larger batches
+            # Use ThreadPoolExecutor with a maximum of workers equal to CPU count or batch size
+            max_workers = min(batch_size, os.cpu_count() or 4)
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                imgs_with_dims = list(executor.map(preproc_func, image))
+        else:
+            # Process sequentially for small batches to avoid thread creation overhead
+            imgs_with_dims = [preproc_func(img) for img in image]
+        
+        # Unzip the results
+        imgs, img_dims = zip(*imgs_with_dims)
+        
+        # Concatenate images based on their type
+        if isinstance(imgs[0], np.ndarray):
+            img_in = np.concatenate(imgs, axis=0)
+        elif "torch" in dir() and hasattr(imgs[0], "shape"):  # More reliable torch tensor check
+            import torch
+            img_in = torch.cat(imgs, dim=0)
+        else:
+            raise ValueError(
+                f"Received images of unsupported type: {type(imgs[0])}. "
+                "Expected numpy array or torch tensor."
+            )
+        
         return img_in, img_dims
 
     @property
