@@ -48,15 +48,18 @@ class BranchingManager:
         self._masks[execution_branch] = mask
 
     def get_mask(self, execution_branch: str) -> Union[Set[DynamicBatchIndex], bool]:
-        if execution_branch not in self._masks:
+        try:
+            return self._masks[execution_branch]
+        except KeyError:
             raise ExecutionEngineRuntimeError(
-                public_message=f"Attempted to get mask for not registered execution branch: {execution_branch}. "
-                f"This is most likely a bug. Contact Roboflow team through github issues "
-                f"(https://github.com/roboflow/inference/issues) providing full context of"
-                f"the problem - including workflow definition you use.",
+                public_message=(
+                    f"Attempted to get mask for not registered execution branch: {execution_branch}. "
+                    "This is most likely a bug. Contact Roboflow team through github issues "
+                    "(https://github.com/roboflow/inference/issues) providing full context of "
+                    "the problem - including workflow definition you use."
+                ),
                 context="workflow_execution | step_input_assembling",
             )
-        return self._masks[execution_branch]
 
     def is_execution_branch_batch_oriented(self, execution_branch: str) -> bool:
         if execution_branch not in self._batch_compatibility:
