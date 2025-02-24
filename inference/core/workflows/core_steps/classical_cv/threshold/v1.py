@@ -143,44 +143,33 @@ def apply_thresholding(
     Returns:
         np.ndarray: Image with thresholding applied.
     """
-    if threshold_type == "binary":
-        _, thresh_image = cv2.threshold(
-            image, thresh_value, max_value, cv2.THRESH_BINARY
-        )
-    elif threshold_type == "binary_inv":
-        _, thresh_image = cv2.threshold(
-            image, thresh_value, max_value, cv2.THRESH_BINARY_INV
-        )
-    elif threshold_type == "trunc":
-        _, thresh_image = cv2.threshold(
-            image, thresh_value, max_value, cv2.THRESH_TRUNC
-        )
-    elif threshold_type == "tozero":
-        _, thresh_image = cv2.threshold(
-            image, thresh_value, max_value, cv2.THRESH_TOZERO
-        )
-    elif threshold_type == "tozero_inv":
-        _, thresh_image = cv2.threshold(
-            image, thresh_value, max_value, cv2.THRESH_TOZERO_INV
-        )
-    elif threshold_type == "adaptive_mean":
-        thresh_image = cv2.adaptiveThreshold(
-            image, max_value, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 11, 2
-        )
-    elif threshold_type == "adaptive_gaussian":
-        thresh_image = cv2.adaptiveThreshold(
-            image,
-            max_value,
-            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-            cv2.THRESH_BINARY,
-            11,
-            2,
-        )
-    elif threshold_type == "otsu":
-        _, thresh_image = cv2.threshold(
-            image, 0, max_value, cv2.THRESH_BINARY + cv2.THRESH_OTSU
-        )
-    else:
+
+    threshold_map = {
+        "binary": (cv2.THRESH_BINARY, True),
+        "binary_inv": (cv2.THRESH_BINARY_INV, True),
+        "trunc": (cv2.THRESH_TRUNC, True),
+        "tozero": (cv2.THRESH_TOZERO, True),
+        "tozero_inv": (cv2.THRESH_TOZERO_INV, True),
+        "adaptive_mean": (cv2.ADAPTIVE_THRESH_MEAN_C, False),
+        "adaptive_gaussian": (cv2.ADAPTIVE_THRESH_GAUSSIAN_C, False),
+        "otsu": (cv2.THRESH_BINARY + cv2.THRESH_OTSU, True),
+    }
+
+    if threshold_type not in threshold_map:
         raise ValueError(f"Unknown threshold type: {threshold_type}")
+
+    th_type, is_global = threshold_map[threshold_type]
+
+    if is_global:
+        if th_type == cv2.THRESH_BINARY + cv2.THRESH_OTSU:
+            _, thresh_image = cv2.threshold(image, 0, max_value, th_type)
+        else:
+            _, thresh_image = cv2.threshold(image, thresh_value, max_value, th_type)
+    else:
+        block_size = 11
+        C = 2
+        thresh_image = cv2.adaptiveThreshold(
+            image, max_value, th_type, cv2.THRESH_BINARY, block_size, C
+        )
 
     return thresh_image
