@@ -146,36 +146,33 @@ def pick_largest_perspective_polygons(
         raise ValueError("Unexpected type of input")
     if not perspective_polygons_batch:
         raise ValueError("Unexpected empty batch")
-    if len(perspective_polygons_batch) == 4 and all(
-        isinstance(p, list) and len(p) == 2 for p in perspective_polygons_batch
-    ):
-        perspective_polygons_batch = [perspective_polygons_batch]
 
-    largest_perspective_polygons: List[np.ndarray] = []
-    for polygons in perspective_polygons_batch:
-        if polygons is None:
-            continue
-        if not isinstance(polygons, list) and not isinstance(polygons, np.ndarray):
-            raise ValueError("Unexpected type of batch element")
-        if len(polygons) == 0:
-            raise ValueError("Unexpected empty batch element")
-        if isinstance(polygons, np.ndarray):
-            if polygons.shape != (4, 2):
+    def check_and_convert(polygon):
+        if isinstance(polygon, np.ndarray):
+            if polygon.shape != (4, 2):
                 raise ValueError("Unexpected shape of batch element")
-            largest_perspective_polygons.append(polygons)
-            continue
-        if len(polygons) == 4 and all(
-            isinstance(p, list) and len(p) == 2 for p in polygons
+            return polygon
+        elif (
+            isinstance(polygon, list)
+            and len(polygon) == 4
+            and all(isinstance(p, list) and len(p) == 2 for p in polygon)
         ):
-            largest_perspective_polygons.append(np.array(polygons))
-            continue
-        polygons = [p if isinstance(p, np.ndarray) else np.array(p) for p in polygons]
-        polygons = [p for p in polygons if p.shape == (4, 2)]
-        if not polygons:
-            raise ValueError("No batch element consists of 4 vertices")
-        polygons = [np.around(p).astype(np.int32) for p in polygons]
-        largest_polygon = max(polygons, key=lambda p: cv.contourArea(p))
-        largest_perspective_polygons.append(largest_polygon)
+            return np.array(polygon)
+        else:
+            polygon = [
+                np.array(p)
+                for p in polygon
+                if isinstance(p, list)
+                and len(p) == 4
+                and all(isinstance(sub, int) for sub in p)
+            ]
+            if not polygon:
+                raise ValueError("No batch element consists of 4 vertices")
+            return max(polygon, key=lambda p: cv.contourArea(p))
+
+    largest_perspective_polygons = [
+        check_and_convert(polygons) for polygons in perspective_polygons_batch
+    ]
     return largest_perspective_polygons
 
 
@@ -252,18 +249,18 @@ def generate_transformation_matrix(
     detections: Optional[sv.Detections] = None,
     detections_anchor: Optional[sv.Position] = None,
 ) -> np.ndarray:
-    polygon_with_vertices_clockwise = sort_polygon_vertices_clockwise(
-        polygon=src_polygon
-    )
+    polygon_with_vertices_clockwise = sort_polygon_vertices_clockwise(src_polygon)
     src_polygon = roll_polygon_vertices_to_start_from_leftmost_bottom(
-        polygon=polygon_with_vertices_clockwise
+        polygon_with_vertices_clockwise
     )
+
     if detections and detections_anchor:
         src_polygon = extend_perspective_polygon(
             polygon=src_polygon,
             detections=detections,
             bbox_position=sv.Position(detections_anchor),
         )
+
     src_polygon = src_polygon.astype(np.float32)
     dst_polygon = np.array(
         [
@@ -271,31 +268,23 @@ def generate_transformation_matrix(
             [0, 0],
             [transformed_rect_width - 1, 0],
             [transformed_rect_width - 1, transformed_rect_height - 1],
-        ]
-    ).astype(dtype=np.float32)
-    # https://docs.opencv.org/4.9.0/da/d54/group__imgproc__transform.html#ga20f62aa3235d869c9956436c870893ae
-    return cv.getPerspectiveTransform(
-        src=src_polygon,
-        dst=dst_polygon,
+        ],
+        dtype=np.float32,
     )
+
+    return cv.getPerspectiveTransform(src=src_polygon, dst=dst_polygon)
 
 
 def correct_detections(
     detections: sv.Detections, perspective_transformer: np.array
 ) -> sv.Detections:
-    corrected_detections: List[sv.Detections] = []
-    for i in range(len(detections)):
-        # copy
-        detection = detections[i]
+    corrected_detections = []
+
+    def correct(detection):
         mask = np.array(detection.mask)
-        if (
-            not np.array_equal(mask, np.array(None))
-            and len(mask) > 0
-            and isinstance(mask[0], np.ndarray)
-        ):
+        if mask.size and isinstance(mask[0], np.ndarray):
             polygon = np.array(sv.mask_to_polygons(mask[0]), dtype=np.float32)
-            # https://docs.opencv.org/4.9.0/d2/de8/group__core__array.html#gad327659ac03e5fd6894b90025e6900a7
-            corrected_polygon: np.ndarray = cv.perspectiveTransform(
+            corrected_polygon = cv.perspectiveTransform(
                 src=polygon, m=perspective_transformer
             ).reshape(-1, 2)
             h, w, *_ = detection.mask[0].shape
@@ -320,8 +309,7 @@ def correct_detections(
                 [[[xmin, ymin], [xmax, ymin], [xmax, ymax], [xmin, ymax]]],
                 dtype=np.float32,
             )
-            # https://docs.opencv.org/4.9.0/d2/de8/group__core__array.html#gad327659ac03e5fd6894b90025e6900a7
-            corrected_polygon: np.ndarray = cv.perspectiveTransform(
+            corrected_polygon = cv.perspectiveTransform(
                 src=polygon, m=perspective_transformer
             ).reshape(-1, 2)
             detection.xyxy = np.array(
@@ -331,6 +319,7 @@ def correct_detections(
                     )
                 ]
             )
+
         if KEYPOINTS_XY_KEY_IN_SV_DETECTIONS in detection.data:
             corrected_key_points = cv.perspectiveTransform(
                 src=np.array(
@@ -342,7 +331,10 @@ def correct_detections(
             detection[KEYPOINTS_XY_KEY_IN_SV_DETECTIONS] = np.array(
                 [np.around(corrected_key_points).astype(np.int32)], dtype="object"
             )
+
         corrected_detections.append(detection)
+
+    list(map(correct, detections))
     return sv.Detections.merge(corrected_detections)
 
 
@@ -377,27 +369,23 @@ class PerspectiveCorrectionBlockV1(WorkflowBlock):
             raise ValueError(
                 "images are required to warp image into requested perspective."
             )
-        if not predictions:
-            predictions = [None] * len(images)
+
+        predictions = predictions or [None] * len(images)
+        batch_size = len(predictions)
 
         if not self.perspective_transformers:
             largest_perspective_polygons = pick_largest_perspective_polygons(
                 perspective_polygons
             )
-
-            batch_size = len(predictions) if predictions else len(images)
             if len(largest_perspective_polygons) == 1 and batch_size > 1:
                 largest_perspective_polygons = largest_perspective_polygons * batch_size
-
             if len(largest_perspective_polygons) != batch_size:
                 raise ValueError(
-                    f"Predictions batch size ({batch_size}) does not match number of perspective polygons ({largest_perspective_polygons})"
+                    f"Predictions batch size ({batch_size}) does not match number of perspective polygons ({len(largest_perspective_polygons)})"
                 )
-            for polygon, detections in zip(largest_perspective_polygons, predictions):
-                if polygon is None:
-                    self.perspective_transformers.append(None)
-                    continue
-                self.perspective_transformers.append(
+
+            self.perspective_transformers = [
+                (
                     generate_transformation_matrix(
                         src_polygon=polygon,
                         detections=detections,
@@ -405,40 +393,42 @@ class PerspectiveCorrectionBlockV1(WorkflowBlock):
                         transformed_rect_height=transformed_rect_height,
                         detections_anchor=extend_perspective_polygon_by_detections_anchor,
                     )
+                    if polygon
+                    else None
                 )
+                for polygon, detections in zip(
+                    largest_perspective_polygons, predictions
+                )
+            ]
 
-        result = []
+        results = []
         for detections, perspective_transformer, image in zip(
             predictions, self.perspective_transformers, images
         ):
             result_image = image
             if warp_image:
-                # https://docs.opencv.org/4.9.0/da/d54/group__imgproc__transform.html#gaf73673a7e8e18ec6963e3774e6a94b87
                 warped_image = cv.warpPerspective(
                     src=image.numpy_image,
                     M=perspective_transformer,
                     dsize=(transformed_rect_width, transformed_rect_height),
                 )
                 result_image = WorkflowImageData.copy_and_replace(
-                    origin_image_data=image,
-                    numpy_image=warped_image,
+                    origin_image_data=image, numpy_image=warped_image
                 )
 
             if detections is None:
-                result.append(
+                results.append(
                     {OUTPUT_DETECTIONS_KEY: None, OUTPUT_IMAGE_KEY: result_image}
                 )
                 continue
 
             corrected_detections = correct_detections(
-                detections=detections,
-                perspective_transformer=perspective_transformer,
+                detections=detections, perspective_transformer=perspective_transformer
             )
-
-            result.append(
+            results.append(
                 {
                     OUTPUT_DETECTIONS_KEY: corrected_detections,
                     OUTPUT_IMAGE_KEY: result_image,
                 }
             )
-        return result
+        return results
