@@ -10,6 +10,8 @@ from inference.core.active_learning.entities import (
     SamplingMethod,
 )
 from inference.core.active_learning.samplers.close_to_threshold import (
+    ELIGIBLE_PREDICTION_TYPES,
+    is_close_to_threshold,
     count_detections_close_to_threshold,
     is_prediction_a_stub,
 )
@@ -63,19 +65,23 @@ def sample_based_on_detections_number(
     selected_class_names: Optional[Set[str]],
     probability: float,
 ) -> bool:
-    if is_prediction_a_stub(prediction=prediction):
+    if prediction.get("is_stub", False):
         return False
     if prediction_type not in ELIGIBLE_PREDICTION_TYPES:
         return False
-    detections_close_to_threshold = count_detections_close_to_threshold(
-        prediction=prediction,
-        selected_class_names=selected_class_names,
-        threshold=0.5,
-        epsilon=1.0,
+
+    threshold, epsilon = 0.5, 1.0
+    detections_close_to_threshold = sum(
+        1
+        for pred in prediction["predictions"]
+        if (selected_class_names is None or pred["class"] in selected_class_names)
+        and is_close_to_threshold(pred["confidence"], threshold, epsilon)
     )
-    if is_in_range(
-        value=detections_close_to_threshold, less_than=less_than, more_than=more_than
-    ):
+
+    more_than_satisfied = more_than is None or detections_close_to_threshold > more_than
+    less_than_satisfied = less_than is None or detections_close_to_threshold < less_than
+
+    if more_than_satisfied and less_than_satisfied:
         return random.random() < probability
     return False
 
