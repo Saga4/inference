@@ -97,10 +97,12 @@ def parse_block_manifest_schema(
 
 
 def retrieve_primitives_from_schema(schema: dict) -> Dict[str, PrimitiveTypeDefinition]:
-    result = []
-    for property_name, property_definition in schema[PROPERTIES_KEY].items():
+    result = OrderedDict()
+    properties = schema[PROPERTIES_KEY]
+    for property_name, property_definition in properties.items():
         if property_name in EXCLUDED_PROPERTIES:
             continue
+
         property_description = property_definition.get(DESCRIPTION_KEY, "not available")
         primitive_metadata = retrieve_primitive_type_from_property(
             property_name=property_name,
@@ -108,8 +110,9 @@ def retrieve_primitives_from_schema(schema: dict) -> Dict[str, PrimitiveTypeDefi
             property_definition=property_definition,
         )
         if primitive_metadata is not None:
-            result.append(primitive_metadata)
-    return OrderedDict((r.property_name, r) for r in result)
+            result[property_name] = primitive_metadata
+
+    return result
 
 
 def retrieve_primitive_type_from_property(
@@ -117,24 +120,27 @@ def retrieve_primitive_type_from_property(
     property_description: str,
     property_definition: dict,
 ) -> Optional[PrimitiveTypeDefinition]:
+
     if REFERENCE_KEY in property_definition:
         return None
+
     if ITEMS_KEY in property_definition:
         result = retrieve_primitive_type_from_property(
             property_name=property_name,
             property_description=property_description,
             property_definition=property_definition[ITEMS_KEY],
         )
-        if result is None:
-            return None
-        high_level_type = (
-            SET_TYPE_NAME
-            if property_definition.get(UNIQUE_ITEMS_KEY, False) is True
-            else LIST_TYPE_NAME
-        )
-        return replace(
-            result, type_annotation=f"{high_level_type}[{result.type_annotation}]"
-        )
+        if result is not None:
+            high_level_type = (
+                SET_TYPE_NAME
+                if property_definition.get(UNIQUE_ITEMS_KEY, False)
+                else LIST_TYPE_NAME
+            )
+            return replace(
+                result, type_annotation=f"{high_level_type}[{result.type_annotation}]"
+            )
+        return None
+
     if TUPLE_ITEMS_KEY in property_definition:
         nested_annotations = [
             retrieve_primitive_type_from_property(
@@ -144,37 +150,42 @@ def retrieve_primitive_type_from_property(
             )
             for nested_definition in property_definition[TUPLE_ITEMS_KEY]
         ]
-        inner_types = ", ".join(a.type_annotation for a in nested_annotations)
+        inner_types = ", ".join(a.type_annotation for a in nested_annotations if a)
         return PrimitiveTypeDefinition(
             property_name=property_name,
             property_description=property_description,
             type_annotation=f"Tuple[{inner_types}]",
         )
-    if property_definition.get(TYPE_KEY) in TYPE_MAPPING:
-        type_name = TYPE_MAPPING[property_definition[TYPE_KEY]]
+
+    type_key = property_definition.get(TYPE_KEY)
+    if type_key in TYPE_MAPPING:
         return PrimitiveTypeDefinition(
             property_name=property_name,
             property_description=property_description,
-            type_annotation=type_name,
+            type_annotation=TYPE_MAPPING[type_key],
         )
+
     if REF_KEY in property_definition:
         return PrimitiveTypeDefinition(
             property_name=property_name,
             property_description=property_description,
             type_annotation=property_definition[REF_KEY].split("/")[-1],
         )
+
     if property_defines_union(property_definition=property_definition):
         return retrieve_primitive_type_from_union_property(
             property_name=property_name,
             property_description=property_description,
             union_definition=property_definition,
         )
-    if property_definition.get(TYPE_KEY) == "object":
+
+    if type_key == OBJECT_TYPE:
         return retrieve_primitive_type_from_dict_property(
             property_name=property_name,
             property_description=property_description,
             property_definition=property_definition,
         )
+
     return PrimitiveTypeDefinition(
         property_name=property_name,
         property_description=property_description,
