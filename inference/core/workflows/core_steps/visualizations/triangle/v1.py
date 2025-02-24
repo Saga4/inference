@@ -1,4 +1,4 @@
-from typing import List, Literal, Optional, Type, Union
+from typing import Tuple, List, Literal, Optional, Type, Union
 
 import supervision as sv
 from pydantic import ConfigDict, Field
@@ -116,28 +116,25 @@ class TriangleVisualizationBlockV1(ColorableVisualizationBlock):
         height: int,
         outline_thickness: int,
     ) -> sv.annotators.base.BaseAnnotator:
-        key = "_".join(
-            map(
-                str,
-                [
-                    color_palette,
-                    palette_size,
-                    color_axis,
-                    position,
-                    base,
-                    height,
-                    outline_thickness,
-                ],
-            )
+        key: Tuple = (
+            color_palette,
+            palette_size,
+            color_axis,
+            position,
+            base,
+            height,
+            outline_thickness,
         )
 
         if key not in self.annotatorCache:
             palette = self.getPalette(color_palette, palette_size, custom_colors)
+            color_lookup = getattr(sv.ColorLookup, color_axis)
+            pos = getattr(sv.Position, position)
 
             self.annotatorCache[key] = sv.TriangleAnnotator(
                 color=palette,
-                color_lookup=getattr(sv.ColorLookup, color_axis),
-                position=getattr(sv.Position, position),
+                color_lookup=color_lookup,
+                position=pos,
                 base=base,
                 height=height,
                 outline_thickness=outline_thickness,
