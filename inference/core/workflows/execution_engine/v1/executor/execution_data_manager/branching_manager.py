@@ -59,15 +59,19 @@ class BranchingManager:
         return self._masks[execution_branch]
 
     def is_execution_branch_batch_oriented(self, execution_branch: str) -> bool:
-        if execution_branch not in self._batch_compatibility:
+        try:
+            return self._batch_compatibility[execution_branch]
+        except KeyError:
+            public_message = (
+                f"Attempted to get info about not registered execution branch: {execution_branch}. "
+                f"This is most likely a bug. Contact Roboflow team through GitHub issues "
+                f"(https://github.com/roboflow/inference/issues) providing full context of "
+                f"the problem - including workflow definition you use."
+            )
             raise ExecutionEngineRuntimeError(
-                public_message=f"Attempted to get info about not registered execution branch: {execution_branch}. "
-                f"This is most likely a bug. Contact Roboflow team through github issues "
-                f"(https://github.com/roboflow/inference/issues) providing full context of"
-                f"the problem - including workflow definition you use.",
+                public_message=public_message,
                 context="workflow_execution | step_input_assembling",
             )
-        return self._batch_compatibility[execution_branch]
 
     def is_execution_branch_registered(self, execution_branch: str) -> bool:
         return execution_branch in self._masks
