@@ -52,14 +52,13 @@ def describe_workflow_outputs(
 
 
 def map_step_name_to_block_type(workflow_steps: List[dict]) -> Dict[str, str]:
-    result = {}
-    for step in workflow_steps:
-        if "name" not in step or "type" not in step:
-            raise WorkflowDefinitionError(
-                public_message="Workflow definition invalid - step without `name` or `type` defined found.",
-                context="describing_workflow_outputs",
-            )
-        result[step["name"]] = step["type"]
+    try:
+        result = {step["name"]: step["type"] for step in workflow_steps}
+    except KeyError:
+        raise WorkflowDefinitionError(
+            public_message="Workflow definition invalid - step without `name` or `type` defined found.",
+            context="describing_workflow_outputs",
+        )
     return result
 
 
