@@ -874,61 +874,102 @@ class OnnxRoboflowInferenceModel(RoboflowInferenceModel):
         logger.debug("Model initialisation finished.")
 
     def load_image(
-        self,
-        image: Any,
-        disable_preproc_auto_orient: bool = False,
-        disable_preproc_contrast: bool = False,
-        disable_preproc_grayscale: bool = False,
-        disable_preproc_static_crop: bool = False,
-    ) -> Tuple[np.ndarray, Tuple[int, int]]:
-        
-     # Fast path for single image
+    self,
+    image: Any,
+    disable_preproc_auto_orient: bool = False,
+    disable_preproc_contrast: bool = False,
+    disable_preproc_grayscale: bool = False,
+    disable_preproc_static_crop: bool = False,
+    usage_inference_test_run: bool = False,
+) -> Tuple[Union[np.ndarray, Any], List[Tuple[int, int]]]:
+    # Handle the single image case
         if not isinstance(image, list):
-            return self.preproc_image(
+            img_in, img_dims = self.preproc_image(
                 image,
                 disable_preproc_auto_orient=disable_preproc_auto_orient,
                 disable_preproc_contrast=disable_preproc_contrast,
                 disable_preproc_grayscale=disable_preproc_grayscale,
                 disable_preproc_static_crop=disable_preproc_static_crop,
             )
+            return img_in, [img_dims]  # Wrap dimensions in a list for consistency
         
-        # Use partial function to create a callable with fixed parameters for map
-        preproc_func = partial(
-            self.preproc_image,
-            disable_preproc_auto_orient=disable_preproc_auto_orient,
-            disable_preproc_contrast=disable_preproc_contrast,
-            disable_preproc_grayscale=disable_preproc_grayscale,
-            disable_preproc_static_crop=disable_preproc_static_crop,
-        )
+        # For empty lists, return appropriate defaults
+        if len(image) == 0:
+            logger.warning("Empty image list provided to load_image")
+            return np.array([]), []
         
-        # Process images in parallel
-        batch_size = len(image)
-        if batch_size > 16:  # Only use parallel processing for larger batches
-            # Use ThreadPoolExecutor with a maximum of workers equal to CPU count or batch size
-            max_workers = min(batch_size, os.cpu_count() or 4)
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                imgs_with_dims = list(executor.map(preproc_func, image))
-        else:
-            # Process sequentially for small batches to avoid thread creation overhead
-            imgs_with_dims = [preproc_func(img) for img in image]
-        
-        # Unzip the results
-        imgs, img_dims = zip(*imgs_with_dims)
-        
-        # Concatenate images based on their type
-        if isinstance(imgs[0], np.ndarray):
-            img_in = np.concatenate(imgs, axis=0)
-        elif "torch" in dir() and hasattr(imgs[0], "shape"):  # More reliable torch tensor check
-            import torch
-            img_in = torch.cat(imgs, dim=0)
-        else:
-            raise ValueError(
-                f"Received images of unsupported type: {type(imgs[0])}. "
-                "Expected numpy array or torch tensor."
+        # Process batch of images
+        try:
+            # Use partial function to create a callable with fixed parameters
+            preproc_func = partial(
+                self.preproc_image,
+                disable_preproc_auto_orient=disable_preproc_auto_orient,
+                disable_preproc_contrast=disable_preproc_contrast,
+                disable_preproc_grayscale=disable_preproc_grayscale,
+                disable_preproc_static_crop=disable_preproc_static_crop,
             )
-        
-        return img_in, img_dims
-
+            
+            batch_size = len(image)
+            # For small batches or test runs, process sequentially
+            if batch_size <= 16 or usage_inference_test_run:
+                imgs_with_dims = [preproc_func(img) for img in image]
+            else:
+                # Use ThreadPoolExecutor for larger batches
+                max_workers = min(batch_size, os.cpu_count() or 4)
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    imgs_with_dims = list(executor.map(preproc_func, image))
+            
+            # Unzip the results
+            if not imgs_with_dims:
+                logger.warning("No images were successfully processed")
+                return np.array([]), []
+                
+            imgs, img_dims = zip(*imgs_with_dims)
+            
+            # Concatenate images based on their type
+            if isinstance(imgs[0], np.ndarray):
+                img_in = np.concatenate(imgs, axis=0)
+            elif "torch" in dir() and isinstance(imgs[0], object) and hasattr(imgs[0], "shape"):
+                import torch
+                img_in = torch.cat(imgs, dim=0)
+            else:
+                logger.error(f"Unsupported image type: {type(imgs[0])}")
+                raise ValueError(
+                    f"Received images of unsupported type: {type(imgs[0])}. "
+                    "Expected numpy array or torch tensor."
+                )
+            
+            return img_in, list(img_dims)
+            
+        except Exception as e:
+            logger.error(f"Error in load_image: {str(e)}")
+            # During test runs, propagate the error
+            if usage_inference_test_run:
+                raise
+            # For production, fall back to sequential processing
+            imgs_with_dims = []
+            for img in image:
+                try:
+                    result = preproc_func(img)
+                    imgs_with_dims.append(result)
+                except Exception as img_error:
+                    logger.warning(f"Failed to process an image: {str(img_error)}")
+                    
+            if not imgs_with_dims:
+                return np.array([]), []
+                
+            imgs, img_dims = zip(*imgs_with_dims)
+            
+            if isinstance(imgs[0], np.ndarray):
+                img_in = np.concatenate(imgs, axis=0)
+            elif "torch" in dir() and hasattr(imgs[0], "shape"):
+                import torch
+                img_in = torch.cat(imgs, dim=0)
+            else:
+                return np.array([]), list(img_dims)
+                
+            return img_in, list(img_dims)
+    
     @property
     def weights_file(self) -> str:
         """Returns the file containing the ONNX model weights.
