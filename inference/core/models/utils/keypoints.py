@@ -21,21 +21,23 @@ def model_keypoints_to_response(
 ) -> List[Keypoint]:
     if keypoints_metadata is None:
         raise ModelArtefactError("Keypoints metadata not available.")
+
     keypoint_id2name = keypoints_metadata[predicted_object_class_id]
+    num_keypoints = len(keypoints) // 3
+    num_names = len(keypoint_id2name)
+
     results = []
-    for keypoint_id in range(len(keypoints) // 3):
-        if keypoint_id >= len(keypoint_id2name):
-            # Ultralytics only supports single class keypoint detection, so points might be padded with zeros
-            break
-        confidence = keypoints[3 * keypoint_id + 2]
-        if confidence < keypoint_confidence_threshold:
-            continue
-        keypoint = Keypoint(
-            x=keypoints[3 * keypoint_id],
-            y=keypoints[3 * keypoint_id + 1],
-            confidence=confidence,
-            class_id=keypoint_id,
-            **{"class": keypoint_id2name[keypoint_id]},
-        )
-        results.append(keypoint)
+    for keypoint_id in range(min(num_keypoints, num_names)):
+        offset = 3 * keypoint_id
+        confidence = keypoints[offset + 2]
+        if confidence >= keypoint_confidence_threshold:
+            keypoint = Keypoint(
+                x=keypoints[offset],
+                y=keypoints[offset + 1],
+                confidence=confidence,
+                class_id=keypoint_id,
+                **{"class": keypoint_id2name[keypoint_id]},
+            )
+            results.append(keypoint)
+
     return results
