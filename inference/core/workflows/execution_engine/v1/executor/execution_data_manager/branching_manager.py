@@ -10,7 +10,10 @@ class BranchingManager:
 
     @classmethod
     def init(cls) -> "BranchingManager":
-        return cls(masks={})
+        instance = cls.__new__(cls)  # Create a new instance without calling __init__
+        instance._masks = {}
+        instance._batch_compatibility = {}
+        return instance
 
     def __init__(self, masks: Dict[str, Union[Set[DynamicBatchIndex], bool]]):
         self._masks = masks
