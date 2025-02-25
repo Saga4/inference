@@ -122,29 +122,25 @@ class ColorableVisualizationBlock(PredictionsVisualizationBlock, ABC):
         elif hasattr(sv.ColorPalette, color_palette):
             return getattr(sv.ColorPalette, color_palette)
         else:
-            palette_name = color_palette.replace("Matplotlib ", "")
-
+            palette_name = color_palette.replace("Matplotlib ", "").lower()
             if palette_name in [
-                "Greys_R",
-                "Purples_R",
-                "Blues_R",
-                "Greens_R",
-                "Oranges_R",
-                "Reds_R",
-                "Wistia",
-                "Pastel1",
-                "Pastel2",
-                "Paired",
-                "Accent",
-                "Dark2",
-                "Set1",
-                "Set2",
-                "Set3",
+                "greys_r",
+                "purples_r",
+                "blues_r",
+                "greens_r",
+                "oranges_r",
+                "reds_r",
+                "wistia",
+                "pastel1",
+                "pastel2",
+                "paired",
+                "accent",
+                "dark2",
+                "set1",
+                "set2",
+                "set3",
             ]:
                 palette_name = palette_name.capitalize()
-            else:
-                palette_name = palette_name.lower()
-
             return sv.ColorPalette.from_matplotlib(palette_name, int(palette_size))
 
     @abstractmethod
