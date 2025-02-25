@@ -3,7 +3,7 @@ import json
 import os
 import warnings
 from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import partial
 from time import perf_counter
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -882,15 +882,27 @@ class OnnxRoboflowInferenceModel(RoboflowInferenceModel):
         disable_preproc_static_crop: bool = False,
     ) -> Tuple[np.ndarray, Tuple[int, int]]:
         if isinstance(image, list):
-            preproc_image = partial(
-                self.preproc_image,
-                disable_preproc_auto_orient=disable_preproc_auto_orient,
-                disable_preproc_contrast=disable_preproc_contrast,
-                disable_preproc_grayscale=disable_preproc_grayscale,
-                disable_preproc_static_crop=disable_preproc_static_crop,
-            )
-            imgs_with_dims = self.image_loader_threadpool.map(preproc_image, image)
-            imgs, img_dims = zip(*imgs_with_dims)
+# Submit all tasks at once
+            futures = []
+            for img in image:
+                future = self.image_loader_threadpool.submit(
+                    self.preproc_image,
+                    img,
+                    disable_preproc_auto_orient=disable_preproc_auto_orient,
+                    disable_preproc_contrast=disable_preproc_contrast,
+                    disable_preproc_grayscale=disable_preproc_grayscale,
+                    disable_preproc_static_crop=disable_preproc_static_crop,
+                )
+                futures.append(future)
+                
+            # Process results as they complete (not in sequential order)
+            imgs = []
+            img_dims = []
+            for future in as_completed(futures):
+                img, dims = future.result()
+                imgs.append(img)
+                img_dims.append(dims)
+                
             if isinstance(imgs[0], np.ndarray):
                 img_in = np.concatenate(imgs, axis=0)
             elif "torch" in dir():
