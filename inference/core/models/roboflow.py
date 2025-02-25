@@ -882,14 +882,45 @@ class OnnxRoboflowInferenceModel(RoboflowInferenceModel):
         disable_preproc_static_crop: bool = False,
     ) -> Tuple[np.ndarray, Tuple[int, int]]:
         if isinstance(image, list):
-            preproc_image = partial(
-                self.preproc_image,
-                disable_preproc_auto_orient=disable_preproc_auto_orient,
-                disable_preproc_contrast=disable_preproc_contrast,
-                disable_preproc_grayscale=disable_preproc_grayscale,
-                disable_preproc_static_crop=disable_preproc_static_crop,
-            )
-            imgs_with_dims = self.image_loader_threadpool.map(preproc_image, image)
+            if len(image) <= 4:
+                imgs_with_dims = []
+                for img in image:
+                    img_result = self.preproc_image(
+                        img,
+                        disable_preproc_auto_orient=disable_preproc_auto_orient,
+                        disable_preproc_contrast=disable_preproc_contrast,
+                        disable_preproc_grayscale=disable_preproc_grayscale,
+                        disable_preproc_static_crop=disable_preproc_static_crop,
+                    )
+                    imgs_with_dims.append(img_result)
+            else:
+                # Use a fixed number of threads based on CPU count
+                import multiprocessing
+                thread_count = max(1, min(len(image), multiprocessing.cpu_count()))
+                
+                # Process images in chunks to avoid result_iterator overhead
+                imgs_with_dims = []
+                with ThreadPoolExecutor(max_workers=thread_count) as executor:
+                    chunk_size = max(1, len(image) // thread_count)
+                    for i in range(0, len(image), chunk_size):
+                        chunk = image[i:i+chunk_size]
+                        futures = []
+                        for img in chunk:
+                            future = executor.submit(
+                                self.preproc_image,
+                                img,
+                                disable_preproc_auto_orient=disable_preproc_auto_orient,
+                                disable_preproc_contrast=disable_preproc_contrast,
+                                disable_preproc_grayscale=disable_preproc_grayscale,
+                                disable_preproc_static_crop=disable_preproc_static_crop,
+                            )
+                            futures.append(future)
+                        
+                        # Wait for all futures in this chunk to complete
+                        for future in futures:
+                            imgs_with_dims.append(future.result())
+            
+            # Separate images and dimensions
             imgs, img_dims = zip(*imgs_with_dims)
             if isinstance(imgs[0], np.ndarray):
                 img_in = np.concatenate(imgs, axis=0)

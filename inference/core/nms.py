@@ -35,72 +35,118 @@ def w_np_non_max_suppression(
     """
     num_classes = prediction.shape[2] - 5 - num_masks
 
-    np_box_corner = np.zeros(prediction.shape)
     if box_format == "xywh":
-        np_box_corner[:, :, 0] = prediction[:, :, 0] - prediction[:, :, 2] / 2
-        np_box_corner[:, :, 1] = prediction[:, :, 1] - prediction[:, :, 3] / 2
-        np_box_corner[:, :, 2] = prediction[:, :, 0] + prediction[:, :, 2] / 2
-        np_box_corner[:, :, 3] = prediction[:, :, 1] + prediction[:, :, 3] / 2
-        prediction[:, :, :4] = np_box_corner[:, :, :4]
-    elif box_format == "xyxy":
-        pass
-    else:
+        pred_view = prediction[:, :, :4]
+        
+        # Calculate all values without allocating a new array
+        x1 = pred_view[:, :, 0] - pred_view[:, :, 2] / 2
+        y1 = pred_view[:, :, 1] - pred_view[:, :, 3] / 2
+        x2 = pred_view[:, :, 0] + pred_view[:, :, 2] / 2
+        y2 = pred_view[:, :, 1] + pred_view[:, :, 3] / 2
+        
+        # Assign directly to the view
+        pred_view[:, :, 0] = x1
+        pred_view[:, :, 1] = y1
+        pred_view[:, :, 2] = x2
+        pred_view[:, :, 3] = y2
+    elif box_format != "xyxy":
         raise ValueError(
             "box_format must be either 'xywh' or 'xyxy', got {}".format(box_format)
         )
 
     batch_predictions = []
-    for np_image_i, np_image_pred in enumerate(prediction):
-        filtered_predictions = []
-        np_conf_mask = np_image_pred[:, 4] >= conf_thresh
 
+    # Pre-allocate space for class confidence and class prediction arrays
+    cls_confs_shape = (prediction.shape[1], 1)
+    cls_preds_shape = cls_confs_shape
+
+    for np_image_i, np_image_pred in enumerate(prediction):
+        np_conf_mask = np_image_pred[:, 4] >= conf_thresh
+        if not np.any(np_conf_mask):  # Quick check if no boxes pass threshold
+            batch_predictions.append([])
+            continue
+            
         np_image_pred = np_image_pred[np_conf_mask]
-        cls_confs = np_image_pred[:, 5 : num_classes + 5]
-        if (
-            np_image_pred.shape[0] == 0
-            or np_image_pred.shape[1] == 0
-            or cls_confs.shape[1] == 0
-        ):
-            batch_predictions.append(filtered_predictions)
+        
+        # Handle empty case after filtering
+        if np_image_pred.shape[0] == 0:
+            batch_predictions.append([])
+            continue
+            
+        cls_confs = np_image_pred[:, 5:num_classes + 5]
+        
+        # Check for empty classes after slicing
+        if cls_confs.shape[1] == 0:
+            batch_predictions.append([])
             continue
 
-        np_class_conf = np.max(cls_confs, 1)
-        np_class_pred = np.argmax(np_image_pred[:, 5 : num_classes + 5], 1)
-        np_class_conf = np.expand_dims(np_class_conf, axis=1)
-        np_class_pred = np.expand_dims(np_class_pred, axis=1)
+        np_class_conf = np.max(cls_confs, axis=1, keepdims=True)
+        np_class_pred = np.argmax(cls_confs, axis=1, keepdims=True)
         np_mask_pred = np_image_pred[:, 5 + num_classes :]
-        np_detections = np.append(
-            np.append(
-                np.append(np_image_pred[:, :5], np_class_conf, axis=1),
-                np_class_pred,
-                axis=1,
-            ),
-            np_mask_pred,
-            axis=1,
-        )
+        # Extract mask predictions if any
+        if num_masks > 0:
+            np_mask_pred = np_image_pred[:, 5 + num_classes:]
+            # Construct final detections array directly
+            np_detections = np.concatenate([
+                np_image_pred[:, :5],
+                np_class_conf,
+                np_class_pred.astype(np.float32),
+                np_mask_pred
+            ], axis=1)
+        else:
+            # Optimization: Avoid concatenation when no masks are present
+            np_detections = np.concatenate([
+                np_image_pred[:, :5],
+                np_class_conf,
+                np_class_pred.astype(np.float32)
+            ], axis=1)
+
 
         np_unique_labels = np.unique(np_detections[:, 6])
 
         if class_agnostic:
-            np_detections_class = sorted(
-                np_detections, key=lambda row: row[4], reverse=True
-            )
-            filtered_predictions.extend(
-                non_max_suppression_fast(np.array(np_detections_class), iou_thresh)
-            )
+            # Sort by confidence directly
+            sorted_indices = np.argsort(-np_detections[:, 4])
+            np_detections_sorted = np_detections[sorted_indices]
+            # Directly pass to optimized NMS
+            filtered_predictions = non_max_suppression_fast(np_detections_sorted, iou_thresh)
         else:
+            filtered_predictions = []
+            np_unique_labels = np.unique(np_class_pred)
+            
+            # Process each class
             for c in np_unique_labels:
-                np_detections_class = np_detections[np_detections[:, 6] == c]
-                np_detections_class = sorted(
-                    np_detections_class, key=lambda row: row[4], reverse=True
-                )
+                class_mask = np_class_pred.squeeze() == c
+                np_detections_class = np_detections[class_mask]
+                
+                # Skip empty arrays
+                if np_detections_class.shape[0] == 0:
+                    continue
+                    
+                # Sort by confidence (highest first)
+                sorted_indices = np.argsort(-np_detections_class[:, 4])
+                np_detections_sorted = np_detections_class[sorted_indices]
+                
+                # Apply optimized NMS and extend filtered predictions
                 filtered_predictions.extend(
-                    non_max_suppression_fast(np.array(np_detections_class), iou_thresh)
+                    non_max_suppression_fast(np_detections_sorted, iou_thresh)
                 )
-        filtered_predictions = sorted(
-            filtered_predictions, key=lambda row: row[4], reverse=True
-        )
-        batch_predictions.append(filtered_predictions[:max_detections])
+        
+        # Sort final predictions by confidence and limit to max_detections
+        if filtered_predictions:
+            # Use numpy sort for better performance
+            filtered_np = np.array(filtered_predictions)
+            idx = np.argsort(-filtered_np[:, 4])
+            filtered_np = filtered_np[idx]
+            
+            # Limit to max_detections
+            if len(filtered_np) > max_detections:
+                filtered_np = filtered_np[:max_detections]
+                
+            batch_predictions.append(filtered_np.tolist())
+        else:
+            batch_predictions.append([])
+    
     return batch_predictions
 
 
@@ -121,7 +167,7 @@ def non_max_suppression_fast(boxes, overlapThresh):
     # if the bounding boxes integers, convert them to floats --
     # this is important since we'll be doing a bunch of divisions
     if boxes.dtype.kind == "i":
-        boxes = boxes.astype("float")
+        boxes = boxes.astype("float32")
     # initialize the list of picked indexes
     pick = []
     # grab the coordinates of the bounding boxes
@@ -133,7 +179,7 @@ def non_max_suppression_fast(boxes, overlapThresh):
     # compute the area of the bounding boxes and sort the bounding
     # boxes by the bottom-right y-coordinate of the bounding box
     area = (x2 - x1 + 1) * (y2 - y1 + 1)
-    idxs = np.argsort(conf)
+    idxs = np.arange(len(boxes))
     # keep looping while some indexes still remain in the indexes
     # list
     while len(idxs) > 0:
@@ -142,6 +188,9 @@ def non_max_suppression_fast(boxes, overlapThresh):
         last = len(idxs) - 1
         i = idxs[last]
         pick.append(i)
+
+        if last == 0:
+            break
         # find the largest (x, y) coordinates for the start of
         # the bounding box and the smallest (x, y) coordinates
         # for the end of the bounding box
@@ -160,4 +209,4 @@ def non_max_suppression_fast(boxes, overlapThresh):
         )
     # return only the bounding boxes that were picked using the
     # integer data type
-    return boxes[pick].astype("float")
+    return boxes[pick].tolist()
