@@ -74,11 +74,11 @@ class PixelateVisualizationBlockV1(PredictionsVisualizationBlock):
         self,
         pixel_size: int,
     ) -> sv.annotators.base.BaseAnnotator:
-        key = "_".join(map(str, [pixel_size]))
-
-        if key not in self.annotatorCache:
-            self.annotatorCache[key] = sv.PixelateAnnotator(pixel_size=pixel_size)
-        return self.annotatorCache[key]
+        if pixel_size not in self.annotatorCache:
+            self.annotatorCache[pixel_size] = sv.PixelateAnnotator(
+                pixel_size=pixel_size
+            )
+        return self.annotatorCache[pixel_size]
 
     def run(
         self,
