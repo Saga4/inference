@@ -263,11 +263,16 @@ def filter_predictions(
 ) -> List[sv.Detections]:
     if not classes_to_consider:
         return predictions
-    return [
-        detections[np.isin(detections["class_name"], classes_to_consider)]
-        for detections in predictions
-        if "class_name" in detections.data
-    ]
+
+    filtered_predictions = []
+    for detections in predictions:
+        if "class_name" in detections.data:
+            class_names = detections["class_name"]
+            mask = np.isin(class_names, classes_to_consider)
+            filtered_detections = detections[mask]
+            filtered_predictions.append(filtered_detections)
+
+    return filtered_predictions
 
 
 def get_detections_from_different_sources_with_max_overlap(
