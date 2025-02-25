@@ -555,10 +555,10 @@ def is_prediction_registration_forbidden(
 ) -> bool:
     if prediction is None:
         return True
-    if isinstance(prediction, sv.Detections) and len(prediction) == 0:
+    if isinstance(prediction, sv.Detections) and not prediction:
         return True
-    if isinstance(prediction, dict) and all(
-        k not in prediction for k in ["top", "predicted_classes"]
+    if isinstance(prediction, dict) and (
+        "top" not in prediction and "predicted_classes" not in prediction
     ):
         return True
     return False
