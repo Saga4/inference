@@ -439,15 +439,18 @@ def check_objects_presence_in_consensus_detections(
 ) -> Tuple[bool, Dict[str, float]]:
     if not consensus_detections:
         return False, {}
+
     if required_objects is None:
         required_objects = 0
-    if isinstance(required_objects, dict) and not class_aware:
+
+    if isinstance(required_objects, int):
+        if len(consensus_detections) < required_objects:
+            return False, {}
+    elif not class_aware:
         required_objects = sum(required_objects.values())
-    if (
-        isinstance(required_objects, int)
-        and len(consensus_detections) < required_objects
-    ):
-        return False, {}
+        if len(consensus_detections) < required_objects:
+            return False, {}
+
     if not class_aware:
         aggregated_confidence = aggregate_field_values(
             detections=consensus_detections,
@@ -455,11 +458,13 @@ def check_objects_presence_in_consensus_detections(
             aggregation_mode=aggregation_mode,
         )
         return True, {"any_object": aggregated_confidence}
+
     class2detections = {}
-    for class_name in set(consensus_detections["class_name"]):
-        class2detections[class_name] = consensus_detections[
-            consensus_detections["class_name"] == class_name
-        ]
+    class_names = consensus_detections["class_name"]
+
+    for class_name in np.unique(class_names):
+        class2detections[class_name] = consensus_detections[class_names == class_name]
+
     if isinstance(required_objects, dict):
         for requested_class, required_objects_count in required_objects.items():
             if (
@@ -467,6 +472,7 @@ def check_objects_presence_in_consensus_detections(
                 or len(class2detections[requested_class]) < required_objects_count
             ):
                 return False, {}
+
     class2confidence = {
         class_name: aggregate_field_values(
             detections=class_detections,
@@ -612,13 +618,14 @@ def aggregate_field_values(
     field: str,
     aggregation_mode: AggregationMode = AggregationMode.AVERAGE,
 ) -> float:
-    values = []
     if hasattr(detections, field):
         values = getattr(detections, field)
-        if isinstance(values, np.ndarray):
-            values = values.astype(float).tolist()
     elif hasattr(detections, "data") and field in detections.data:
         values = detections[field]
-        if isinstance(values, np.ndarray):
-            values = values.astype(float).tolist()
+    else:
+        return 0.0  # Return 0.0 if the field does not exist
+
+    if isinstance(values, np.ndarray):
+        values = values.astype(float).tolist()
+
     return AGGREGATION_MODE2FIELD_AGGREGATOR[aggregation_mode](values)
