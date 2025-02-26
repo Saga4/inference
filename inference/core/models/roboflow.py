@@ -882,14 +882,21 @@ class OnnxRoboflowInferenceModel(RoboflowInferenceModel):
         disable_preproc_static_crop: bool = False,
     ) -> Tuple[np.ndarray, Tuple[int, int]]:
         if isinstance(image, list):
-            preproc_image = partial(
-                self.preproc_image,
-                disable_preproc_auto_orient=disable_preproc_auto_orient,
-                disable_preproc_contrast=disable_preproc_contrast,
-                disable_preproc_grayscale=disable_preproc_grayscale,
-                disable_preproc_static_crop=disable_preproc_static_crop,
-            )
-            imgs_with_dims = self.image_loader_threadpool.map(preproc_image, image)
+            # Create a function that will be applied to each image
+            def process_image(img):
+                return self.preproc_image(
+                    img,
+                    disable_preproc_auto_orient=disable_preproc_auto_orient,
+                    disable_preproc_contrast=disable_preproc_contrast,
+                    disable_preproc_grayscale=disable_preproc_grayscale,
+                    disable_preproc_static_crop=disable_preproc_static_crop,
+                )
+            
+            # Process all images in parallel and collect all results immediately,
+            # avoiding the result_iterator issue
+            with ThreadPoolExecutor(max_workers=min(len(image), 16)) as executor:
+                imgs_with_dims = list(executor.map(process_image, image))
+            
             imgs, img_dims = zip(*imgs_with_dims)
             if isinstance(imgs[0], np.ndarray):
                 img_in = np.concatenate(imgs, axis=0)
