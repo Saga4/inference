@@ -880,24 +880,122 @@ class OnnxRoboflowInferenceModel(RoboflowInferenceModel):
         disable_preproc_contrast: bool = False,
         disable_preproc_grayscale: bool = False,
         disable_preproc_static_crop: bool = False,
-    ) -> Tuple[np.ndarray, Tuple[int, int]]:
+    ) -> Tuple[np.ndarray, List[Tuple[int, int]]]:
+        """
+        Optimized load_image method using multiprocessing for CPU-bound preprocessing.
+        This implementation uses a temporary process pool for each batch, which avoids
+        issues with class serialization.
+        """
         if isinstance(image, list):
-            # Create a function that will be applied to each image
-            def process_image(img):
-                return self.preproc_image(
-                    img,
-                    disable_preproc_auto_orient=disable_preproc_auto_orient,
-                    disable_preproc_contrast=disable_preproc_contrast,
-                    disable_preproc_grayscale=disable_preproc_grayscale,
-                    disable_preproc_static_crop=disable_preproc_static_crop,
-                )
-            
-            # Process all images in parallel and collect all results immediately,
-            # avoiding the result_iterator issue
-            with ThreadPoolExecutor(max_workers=min(len(image), 16)) as executor:
-                imgs_with_dims = list(executor.map(process_image, image))
-            
+            # For small batches, avoid the multiprocessing overhead
+            if len(image) <= 2:
+                imgs_with_dims = []
+                for img in image:
+                    result = self.preproc_image(
+                        img,
+                        disable_preproc_auto_orient=disable_preproc_auto_orient,
+                        disable_preproc_contrast=disable_preproc_contrast,
+                        disable_preproc_grayscale=disable_preproc_grayscale,
+                        disable_preproc_static_crop=disable_preproc_static_crop,
+                    )
+                    imgs_with_dims.append(result)
+            else:
+                # Use multiprocessing for larger batches
+                import multiprocessing as mp
+                from functools import partial
+                
+                # Create a specialized worker function that captures the preprocessing parameters
+                # but doesn't require access to self (which can't be pickled)
+                def worker_function(img):
+                    # This requires load_image and prepare to be importable
+                    from inference.core.utils.image_utils import load_image
+                    from inference.core.utils.preprocess import prepare, letterbox_image
+                    
+                    # Replicate the preprocessing logic from preproc_image
+                    np_image, is_bgr = load_image(
+                        img,
+                        disable_preproc_auto_orient=disable_preproc_auto_orient or "auto-orient" not in self.preproc.keys() or DISABLE_PREPROC_AUTO_ORIENT,
+                    )
+                    
+                    # Get a shallow copy of self.preproc to avoid serialization issues
+                    preproc_config = dict(self.preproc)
+                    
+                    # Apply preprocessing
+                    preprocessed_image, img_dims = prepare(
+                        np_image,
+                        preproc_config,
+                        disable_preproc_contrast=disable_preproc_contrast,
+                        disable_preproc_grayscale=disable_preproc_grayscale,
+                        disable_preproc_static_crop=disable_preproc_static_crop,
+                    )
+                    
+                    # Replicate the resize logic
+                    resize_method = self.resize_method
+                    img_size_w, img_size_h = self.img_size_w, self.img_size_h
+                    
+                    if USE_PYTORCH_FOR_PREPROCESSING and "torch" in dir():
+                        preprocessed_image = torch.from_numpy(np.ascontiguousarray(preprocessed_image))
+                        if torch.cuda.is_available():
+                            preprocessed_image = preprocessed_image.cuda()
+                        preprocessed_image = preprocessed_image.permute(2, 0, 1).unsqueeze(0).contiguous().float()
+                    
+                    if resize_method == "Stretch to":
+                        if isinstance(preprocessed_image, np.ndarray):
+                            preprocessed_image = preprocessed_image.astype(np.float32)
+                            resized = cv2.resize(
+                                preprocessed_image,
+                                (img_size_w, img_size_h),
+                            )
+                        elif "torch" in dir():
+                            resized = torch.nn.functional.interpolate(
+                                preprocessed_image,
+                                size=(img_size_h, img_size_w),
+                                mode="bilinear",
+                            )
+                        else:
+                            raise ValueError(f"Unsupported image type: {type(preprocessed_image)}")
+                    
+                    elif resize_method.startswith("Fit ("):
+                        color = (0, 0, 0)  # default black
+                        if resize_method == "Fit (white edges) in":
+                            color = (255, 255, 255)
+                        elif resize_method == "Fit (grey edges) in":
+                            color = (114, 114, 114)
+                        
+                        resized = letterbox_image(
+                            preprocessed_image,
+                            (img_size_w, img_size_h),
+                            color=color,
+                        )
+                    
+                    if is_bgr:
+                        if isinstance(resized, np.ndarray):
+                            resized = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+                        else:
+                            resized = resized[:, [2, 1, 0], :, :]
+                    
+                    if isinstance(resized, np.ndarray):
+                        img_in = np.transpose(resized, (2, 0, 1))
+                        img_in = img_in.astype(np.float32)
+                        img_in = np.expand_dims(img_in, axis=0)
+                    elif "torch" in dir():
+                        img_in = resized.float()
+                    else:
+                        raise ValueError(f"Unsupported image type: {type(resized)}")
+                    
+                    return img_in, img_dims
+                
+                # Calculate optimal number of workers
+                num_workers = min(len(image), max(1, mp.cpu_count() - 1))
+                
+                # Use a temporary pool for this batch
+                with mp.Pool(processes=num_workers) as pool:
+                    imgs_with_dims = pool.map(worker_function, image)
+                
+            # Extract images and dimensions
             imgs, img_dims = zip(*imgs_with_dims)
+            
+            # Combine into batch
             if isinstance(imgs[0], np.ndarray):
                 img_in = np.concatenate(imgs, axis=0)
             elif "torch" in dir():
@@ -917,6 +1015,7 @@ class OnnxRoboflowInferenceModel(RoboflowInferenceModel):
                 disable_preproc_static_crop=disable_preproc_static_crop,
             )
             img_dims = [img_dims]
+        
         return img_in, img_dims
 
     @property
