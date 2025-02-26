@@ -881,7 +881,7 @@ class OnnxRoboflowInferenceModel(RoboflowInferenceModel):
         disable_preproc_grayscale: bool = False,
         disable_preproc_static_crop: bool = False,
     ) -> Tuple[np.ndarray, Tuple[int, int]]:
-        if isinstance(image, list):
+        if isinstance(image, list) and len(image) > 1:
             preproc_image = partial(
                 self.preproc_image,
                 disable_preproc_auto_orient=disable_preproc_auto_orient,
@@ -902,6 +902,8 @@ class OnnxRoboflowInferenceModel(RoboflowInferenceModel):
                     "(https://github.com/roboflow/inference/issues) providing full context of the problem"
                 )
         else:
+            if isinstance(image, list):
+                image = image[0]
             img_in, img_dims = self.preproc_image(
                 image,
                 disable_preproc_auto_orient=disable_preproc_auto_orient,
