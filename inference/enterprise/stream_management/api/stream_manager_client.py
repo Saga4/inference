@@ -277,10 +277,15 @@ def dispatch_error(error_response: dict) -> None:
 
 
 def build_response(response: dict) -> CommandResponse:
-    status = response[RESPONSE_KEY][STATUS_KEY]
+    response_details = response[RESPONSE_KEY]  # Fetch the nested dictionary once
+    status = response_details[STATUS_KEY]
+
+    request_id = response.get(REQUEST_ID_KEY)
+    pipeline_id = response.get(PIPELINE_ID_KEY)
+
     context = CommandContext(
-        request_id=response.get(REQUEST_ID_KEY),
-        pipeline_id=response.get(PIPELINE_ID_KEY),
+        request_id=request_id,
+        pipeline_id=pipeline_id,
     )
     return CommandResponse(
         status=status,
