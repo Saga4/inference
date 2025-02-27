@@ -935,40 +935,48 @@ class OnnxRoboflowInferenceModel(RoboflowInferenceModel):
                 local_vars,
             )
         )
-        if isinstance(image, list):
-            preproc_image = partial(
-                self.preproc_image,
-                disable_preproc_auto_orient=disable_preproc_auto_orient,
-                disable_preproc_contrast=disable_preproc_contrast,
-                disable_preproc_grayscale=disable_preproc_grayscale,
-                disable_preproc_static_crop=disable_preproc_static_crop,
-            )
-            imgs_with_dims = self.image_loader_threadpool.map(preproc_image, image)
-            imgs, img_dims = zip(*imgs_with_dims)
-            if isinstance(imgs[0], np.ndarray):
-                img_in = np.concatenate(imgs, axis=0)
-            elif "torch" in dir():
-                img_in = torch.cat(imgs, dim=0)
-            else:
-                raise ValueError(
-                    f"Received a list of images of unknown type, {type(imgs[0])}; "
-                    "This is most likely a bug. Contact Roboflow team through github issues "
-                    "(https://github.com/roboflow/inference/issues) providing full context of the problem"
+        
+        try:
+            if isinstance(image, list):
+                preproc_image = partial(
+                    self.preproc_image,
+                    disable_preproc_auto_orient=disable_preproc_auto_orient,
+                    disable_preproc_contrast=disable_preproc_contrast,
+                    disable_preproc_grayscale=disable_preproc_grayscale,
+                    disable_preproc_static_crop=disable_preproc_static_crop,
                 )
-        else:
-            img_in, img_dims = self.preproc_image(
-                image,
-                disable_preproc_auto_orient=disable_preproc_auto_orient,
-                disable_preproc_contrast=disable_preproc_contrast,
-                disable_preproc_grayscale=disable_preproc_grayscale,
-                disable_preproc_static_crop=disable_preproc_static_crop,
-            )
-            img_dims = [img_dims]
-            result = (img_in, img_dims)
+                imgs_with_dims = self.image_loader_threadpool.map(preproc_image, image)
+                imgs, img_dims = zip(*imgs_with_dims)
+                if isinstance(imgs[0], np.ndarray):
+                    img_in = np.concatenate(imgs, axis=0)
+                elif "torch" in dir():
+                    img_in = torch.cat(imgs, dim=0)
+                else:
+                    raise ValueError(
+                        f"Received a list of images of unknown type, {type(imgs[0])}; "
+                        "This is most likely a bug. Contact Roboflow team through github issues "
+                        "(https://github.com/roboflow/inference/issues) providing full context of the problem"
+                    )
+                result = (img_in, img_dims)
+            else:
+                img_in, img_dims = self.preproc_image(
+                    image,
+                    disable_preproc_auto_orient=disable_preproc_auto_orient,
+                    disable_preproc_contrast=disable_preproc_contrast,
+                    disable_preproc_grayscale=disable_preproc_grayscale,
+                    disable_preproc_static_crop=disable_preproc_static_crop,
+                )
+                img_dims = [img_dims]
+                result = (img_in, img_dims)
             
             # Record the return value
             t_ns_end = time.perf_counter_ns()
-            result_vars = pickle.dumps(result, protocol=pickle.HIGHEST_PROTOCOL)
+            try:
+                result_vars = pickle.dumps(result, protocol=pickle.HIGHEST_PROTOCOL)
+            except Exception as e:
+                print(f"Warning: Failed to pickle result: {e}")
+                result_vars = pickle.dumps(("UNPICKLABLE_RESULT",))
+                
             cur.execute(
                 "INSERT INTO function_calls VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
                 (
@@ -988,6 +996,35 @@ class OnnxRoboflowInferenceModel(RoboflowInferenceModel):
             con.close()
             print(f"Finished tracing load_image, wrote to {trace_file}")
             return result
+            
+        except Exception as e:
+            # Record the exception
+            t_ns_end = time.perf_counter_ns()
+            error_message = str(e)
+            print(f"Error in load_image: {error_message}")
+            
+            try:
+                error_vars = pickle.dumps({"error": error_message})
+                cur.execute(
+                    "INSERT INTO function_calls VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        "exception",
+                        "load_image",
+                        "OnnxRoboflowInferenceModel",
+                        file_name,
+                        0,
+                        0,
+                        t_ns_end,
+                        error_vars,
+                    )
+                )
+                con.commit()
+            except Exception as e2:
+                print(f"Failed to record exception: {e2}")
+                
+            con.close()
+            print(f"Failed tracing load_image, but wrote partial trace to {trace_file}")
+            raise
 
     @property
     def weights_file(self) -> str:
