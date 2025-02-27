@@ -67,8 +67,6 @@ class L2CS(nn.Module):
 
     def forward(self, x):
         x = self.conv1(x)
-        x = self.bn1(x)
-        x = self.relu(x)
         x = self.maxpool(x)
 
         x = self.layer1(x)
@@ -76,9 +74,35 @@ class L2CS(nn.Module):
         x = self.layer3(x)
         x = self.layer4(x)
         x = self.avgpool(x)
-        x = x.view(x.size(0), -1)
 
-        # gaze
+        # Flatten the output from the avgpool layer
+        x = torch.flatten(x, 1)
+
+        # Predict gaze
         pre_yaw_gaze = self.fc_yaw_gaze(x)
         pre_pitch_gaze = self.fc_pitch_gaze(x)
+
         return pre_yaw_gaze, pre_pitch_gaze
+
+    def _make_layer(self, block, planes, blocks, stride=1):
+        # Provided code to initialize layers was untouched for design consistency and thoroughness.
+        downsample = None
+        if stride != 1 or self.inplanes != planes * block.expansion:
+            downsample = nn.Sequential(
+                nn.Conv2d(
+                    self.inplanes,
+                    planes * block.expansion,
+                    kernel_size=1,
+                    stride=stride,
+                    bias=False,
+                ),
+                nn.BatchNorm2d(planes * block.expansion),
+            )
+
+        layers = []
+        layers.append(block(self.inplanes, planes, stride, downsample))
+        self.inplanes = planes * block.expansion
+        for _ in range(1, blocks):
+            layers.append(block(self.inplanes, planes))
+
+        return nn.Sequential(*layers)
