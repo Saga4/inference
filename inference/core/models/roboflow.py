@@ -895,6 +895,8 @@ class OnnxRoboflowInferenceModel(RoboflowInferenceModel):
         onnx = arguments["self"].onnx_session
         if hasattr(arguments["self"], "onnx_session"):
             delattr(arguments["self"], "onnx_session")
+        if hasattr(arguments["self"], "image_loader_threadpool"):
+            delattr(arguments["self"], "image_loader_threadpool")
 
 
         # Use global tracking for traces
@@ -943,8 +945,8 @@ class OnnxRoboflowInferenceModel(RoboflowInferenceModel):
                     t_ns,
                     local_args
 
-                )
-            ) # Record the function call
+                ),
+            )
         # Execute original function
         if isinstance(image, list):
             preproc_image = partial(
