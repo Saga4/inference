@@ -104,21 +104,23 @@ def build_operation(
     operation_definition: OperationDefinition,
     execution_context: str,
 ) -> Callable[[T], V]:
-    if operation_definition.type in REGISTERED_SIMPLE_OPERATIONS:
+    op_type = operation_definition.type
+    if op_type in REGISTERED_SIMPLE_OPERATIONS:
         return build_simple_operation(
             operation_definition=operation_definition,
-            operation_function=REGISTERED_SIMPLE_OPERATIONS[operation_definition.type],
+            operation_function=REGISTERED_SIMPLE_OPERATIONS[op_type],
             execution_context=execution_context,
         )
-    if operation_definition.type in REGISTERED_COMPOUND_OPERATIONS_BUILDERS:
-        return REGISTERED_COMPOUND_OPERATIONS_BUILDERS[operation_definition.type](
+    elif op_type in REGISTERED_COMPOUND_OPERATIONS_BUILDERS:
+        return REGISTERED_COMPOUND_OPERATIONS_BUILDERS[op_type](
             operation_definition, execution_context
         )
-    raise OperationTypeNotRecognisedError(
-        public_message=f"Attempted to build operation with declared type: {operation_definition.type} "
-        f"which was not registered in Roboflow Query Language.",
-        context="step_execution | roboflow_query_language_compilation",
-    )
+    else:
+        raise OperationTypeNotRecognisedError(
+            public_message=f"Attempted to build operation with declared type: {op_type} "
+            f"which was not registered in Roboflow Query Language.",
+            context="step_execution | roboflow_query_language_compilation",
+        )
 
 
 def build_simple_operation(
@@ -126,10 +128,11 @@ def build_simple_operation(
     operation_function: Callable[[T], V],
     execution_context: str,
 ) -> Callable[[T], V]:
-    predefined_arguments_names = [
-        t for t in type(operation_definition).model_fields if t != TYPE_PARAMETER_NAME
-    ]
-    kwargs = {a: getattr(operation_definition, a) for a in predefined_arguments_names}
+    kwargs = {
+        a: getattr(operation_definition, a)
+        for a in operation_definition.__annotations__
+        if a != TYPE_PARAMETER_NAME
+    }
     kwargs["execution_context"] = execution_context
     return partial(operation_function, **kwargs)
 
