@@ -881,6 +881,60 @@ class OnnxRoboflowInferenceModel(RoboflowInferenceModel):
         disable_preproc_grayscale: bool = False,
         disable_preproc_static_crop: bool = False,
     ) -> Tuple[np.ndarray, Tuple[int, int]]:
+        print("Starting load_image tracing...")
+        import sqlite3
+        import pickle
+        import time
+        import os
+        from pathlib import Path
+        
+        # Create trace file if it doesn't exist
+        trace_file = Path("/home/ubuntu/inference/codeflash.trace")
+        create_table = not trace_file.exists()
+        
+        # Connect to the trace database
+        con = sqlite3.connect(trace_file)
+        cur = con.cursor()
+        
+        if create_table:
+            cur.execute("""PRAGMA synchronous = OFF""")
+            cur.execute(
+                "CREATE TABLE function_calls(type TEXT, function TEXT, classname TEXT, filename TEXT, "
+                "line_number INTEGER, last_frame_address INTEGER, time_ns INTEGER, args BLOB)"
+            )
+            
+        # Capture the arguments
+        args = {
+            "image": image,
+            "disable_preproc_auto_orient": disable_preproc_auto_orient,
+            "disable_preproc_contrast": disable_preproc_contrast,
+            "disable_preproc_grayscale": disable_preproc_grayscale,
+            "disable_preproc_static_crop": disable_preproc_static_crop,
+        }
+        
+        # Pickle the arguments
+        try:
+            local_vars = pickle.dumps(args, protocol=pickle.HIGHEST_PROTOCOL)
+        except (TypeError, pickle.PicklingError):
+            print("Warning: Failed to pickle arguments for load_image")
+            local_vars = pickle.dumps({})
+        
+        # Record the function call
+        t_ns = time.perf_counter_ns()
+        file_name = os.path.abspath(__file__)
+        cur.execute(
+            "INSERT INTO function_calls VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "call",
+                "load_image",
+                "OnnxRoboflowInferenceModel",
+                file_name,
+                0,  # line number (not important)
+                0,  # frame address (not important)
+                t_ns,
+                local_vars,
+            )
+        )
         if isinstance(image, list):
             preproc_image = partial(
                 self.preproc_image,
@@ -910,7 +964,30 @@ class OnnxRoboflowInferenceModel(RoboflowInferenceModel):
                 disable_preproc_static_crop=disable_preproc_static_crop,
             )
             img_dims = [img_dims]
-        return img_in, img_dims
+            result = (img_in, img_dims)
+            
+            # Record the return value
+            t_ns_end = time.perf_counter_ns()
+            result_vars = pickle.dumps(result, protocol=pickle.HIGHEST_PROTOCOL)
+            cur.execute(
+                "INSERT INTO function_calls VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    "return",
+                    "load_image",
+                    "OnnxRoboflowInferenceModel",
+                    file_name,
+                    0,  # line number (not important)
+                    0,  # frame address (not important)
+                    t_ns_end,
+                    result_vars,
+                )
+            )
+            
+            # Commit and close
+            con.commit()
+            con.close()
+            print(f"Finished tracing load_image, wrote to {trace_file}")
+            return result
 
     @property
     def weights_file(self) -> str:
