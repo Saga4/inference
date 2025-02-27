@@ -102,10 +102,13 @@ def from_multilabel_classification_response(
 
 
 def from_object_detection_response(response: ObjectDetectionInferenceResponse):
-    return [
+    predictions = response.predictions
+    # Using list comprehension with pre-allocation for faster execution
+    result = [
         {"class": pred.class_name, "confidence": pred.confidence}
-        for pred in response.predictions
+        for pred in predictions
     ]
+    return result
 
 
 def from_instance_segmentation_response(
