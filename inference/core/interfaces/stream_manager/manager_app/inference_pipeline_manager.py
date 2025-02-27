@@ -455,15 +455,17 @@ class InferencePipelineManager(Process):
             )
 
     def _resume_pipeline(self, request_id: str) -> None:
-        if self._inference_pipeline is None:
-            return self._handle_error(
+        if not self._inference_pipeline:
+            self._handle_error(
                 request_id=request_id,
                 public_error_message="Cannot retrieve InferencePipeline status. Internal Error. Service misconfigured.",
                 error_type=ErrorType.OPERATION_ERROR,
             )
+            return
+
         try:
             self._inference_pipeline.resume_stream()
-            logger.info(f"Pipeline resumed. request_id={request_id}...")
+            logger.info(f"Pipeline resumed. request_id={request_id}")
             self._responses_queue.put(
                 (request_id, {STATUS_KEY: OperationStatus.SUCCESS})
             )
@@ -563,8 +565,7 @@ class InferencePipelineManager(Process):
         error_type: ErrorType = ErrorType.INTERNAL_ERROR,
     ):
         logger.exception(
-            f"Could not handle Command. request_id={request_id}, "
-            f"error={error}, error_type={error_type}, public_error_message={public_error_message}"
+            f"Could not handle Command. request_id={request_id}, error={error}, error_type={error_type}, public_error_message={public_error_message}"
         )
         response_payload = describe_error(
             error, error_type=error_type, public_error_message=public_error_message
