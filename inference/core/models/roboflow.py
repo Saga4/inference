@@ -13,7 +13,7 @@ import numpy as np
 import onnxruntime
 from PIL import Image
 import sqlite3
-import dill
+import pickle
 import time
 import os
 import hashlib
@@ -901,13 +901,8 @@ class OnnxRoboflowInferenceModel(RoboflowInferenceModel):
         # Target for total number of traces
         max_traces = 256
 
-        # Determine if we should trace this call based on diversity
-        should_trace = False
-
-
         # Always trace if we haven't reached the max yet
         if self.__class__._trace_counter < max_traces:
-            should_trace = True
 
             # At this point, we decided to trace this call
             self.__class__._trace_counter += 1
@@ -931,7 +926,7 @@ class OnnxRoboflowInferenceModel(RoboflowInferenceModel):
             # Record the function call
             t_ns = time.perf_counter_ns()
             file_name = os.path.abspath(__file__)
-            local_args = dill.dumps(arguments, protocol=dill.HIGHEST_PROTOCOL)
+            local_args = pickle.dumps(arguments, protocol=pickle.HIGHEST_PROTOCOL)
             cur.execute(
                 "INSERT INTO function_calls VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
                 (
