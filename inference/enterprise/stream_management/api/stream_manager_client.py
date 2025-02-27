@@ -252,10 +252,8 @@ async def receive_message(
 
 
 def is_request_unsuccessful(response: dict) -> bool:
-    return (
-        response.get(RESPONSE_KEY, {}).get(STATUS_KEY, OperationStatus.FAILURE.value)
-        != OperationStatus.SUCCESS.value
-    )
+    response_content = response.get(RESPONSE_KEY, {})
+    return response_content.get(STATUS_KEY) != OperationStatus.SUCCESS.value
 
 
 def dispatch_error(error_response: dict) -> None:
