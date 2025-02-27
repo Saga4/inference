@@ -881,12 +881,101 @@ class OnnxRoboflowInferenceModel(RoboflowInferenceModel):
         disable_preproc_grayscale: bool = False,
         disable_preproc_static_crop: bool = False,
     ) -> Tuple[np.ndarray, Tuple[int, int]]:
-        print("Starting load_image tracing...")
+        # Set up tracing with constraints
         import sqlite3
         import pickle
         import time
         import os
+        import hashlib
         from pathlib import Path
+        
+        # Use a global counter to limit traces
+        if not hasattr(self.__class__, '_trace_counter'):
+            self.__class__._trace_counter = 0
+            self.__class__._traced_hashes = set()
+        
+        # Only trace a max of 50 calls
+        max_traces = 100
+        if self.__class__._trace_counter >= max_traces:
+            # Skip tracing if we've hit our limit
+            if isinstance(image, list):
+                preproc_image = partial(
+                    self.preproc_image,
+                    disable_preproc_auto_orient=disable_preproc_auto_orient,
+                    disable_preproc_contrast=disable_preproc_contrast,
+                    disable_preproc_grayscale=disable_preproc_grayscale,
+                    disable_preproc_static_crop=disable_preproc_static_crop,
+                )
+                imgs_with_dims = self.image_loader_threadpool.map(preproc_image, image)
+                imgs, img_dims = zip(*imgs_with_dims)
+                if isinstance(imgs[0], np.ndarray):
+                    img_in = np.concatenate(imgs, axis=0)
+                elif "torch" in dir():
+                    img_in = torch.cat(imgs, dim=0)
+                else:
+                    raise ValueError(f"Received a list of images of unknown type, {type(imgs[0])}")
+                return img_in, img_dims
+            else:
+                img_in, img_dims = self.preproc_image(
+                    image,
+                    disable_preproc_auto_orient=disable_preproc_auto_orient,
+                    disable_preproc_contrast=disable_preproc_contrast,
+                    disable_preproc_grayscale=disable_preproc_grayscale,
+                    disable_preproc_static_crop=disable_preproc_static_crop,
+                )
+                img_dims = [img_dims]
+                return img_in, img_dims
+        
+        # Check if this is a similar input to something we've already traced
+        try:
+            # Create a simple hash of input characteristics for diversity
+            input_hash = ""
+            if isinstance(image, list):
+                input_hash = f"list-{len(image)}"
+            else:
+                input_hash = "single"
+            
+            # Add other parameters to hash
+            input_hash += f"-{disable_preproc_auto_orient}-{disable_preproc_contrast}-{disable_preproc_grayscale}-{disable_preproc_static_crop}"
+            
+            # Skip if we've seen similar inputs
+            if input_hash in self.__class__._traced_hashes:
+                # Skip tracing for this call
+                if isinstance(image, list):
+                    preproc_image = partial(
+                        self.preproc_image,
+                        disable_preproc_auto_orient=disable_preproc_auto_orient,
+                        disable_preproc_contrast=disable_preproc_contrast,
+                        disable_preproc_grayscale=disable_preproc_grayscale,
+                        disable_preproc_static_crop=disable_preproc_static_crop,
+                    )
+                    imgs_with_dims = self.image_loader_threadpool.map(preproc_image, image)
+                    imgs, img_dims = zip(*imgs_with_dims)
+                    if isinstance(imgs[0], np.ndarray):
+                        img_in = np.concatenate(imgs, axis=0)
+                    elif "torch" in dir():
+                        img_in = torch.cat(imgs, dim=0)
+                    else:
+                        raise ValueError(f"Received a list of images of unknown type, {type(imgs[0])}")
+                    return img_in, img_dims
+                else:
+                    img_in, img_dims = self.preproc_image(
+                        image,
+                        disable_preproc_auto_orient=disable_preproc_auto_orient,
+                        disable_preproc_contrast=disable_preproc_contrast,
+                        disable_preproc_grayscale=disable_preproc_grayscale,
+                        disable_preproc_static_crop=disable_preproc_static_crop,
+                    )
+                    img_dims = [img_dims]
+                    return img_in, img_dims
+            
+            # Add this hash to our tracked set
+            self.__class__._traced_hashes.add(input_hash)
+        except:
+            # If hashing fails, continue with tracing anyway
+            pass
+        
+        print(f"Starting load_image tracing... ({self.__class__._trace_counter + 1}/{max_traces})")
         
         # Create trace file if it doesn't exist
         trace_file = Path("/home/ubuntu/inference/codeflash.trace")
@@ -902,7 +991,7 @@ class OnnxRoboflowInferenceModel(RoboflowInferenceModel):
                 "CREATE TABLE function_calls(type TEXT, function TEXT, classname TEXT, filename TEXT, "
                 "line_number INTEGER, last_frame_address INTEGER, time_ns INTEGER, args BLOB)"
             )
-            
+        
         # Capture the arguments
         args = {
             "image": image,
@@ -912,11 +1001,23 @@ class OnnxRoboflowInferenceModel(RoboflowInferenceModel):
             "disable_preproc_static_crop": disable_preproc_static_crop,
         }
         
-        # Pickle the arguments
+        # Pickle the arguments - try a simpler approach for lists
         try:
-            local_vars = pickle.dumps(args, protocol=pickle.HIGHEST_PROTOCOL)
-        except (TypeError, pickle.PicklingError):
-            print("Warning: Failed to pickle arguments for load_image")
+            if isinstance(image, list):
+                # For lists, don't try to pickle the actual images, just their shape/type info
+                simple_args = {
+                    "image_type": "list",
+                    "image_count": len(image),
+                    "disable_preproc_auto_orient": disable_preproc_auto_orient,
+                    "disable_preproc_contrast": disable_preproc_contrast,
+                    "disable_preproc_grayscale": disable_preproc_grayscale,
+                    "disable_preproc_static_crop": disable_preproc_static_crop,
+                }
+                local_vars = pickle.dumps(simple_args, protocol=pickle.HIGHEST_PROTOCOL)
+            else:
+                local_vars = pickle.dumps(args, protocol=pickle.HIGHEST_PROTOCOL)
+        except Exception as e:
+            print(f"Warning: Failed to pickle arguments for load_image: {e}")
             local_vars = pickle.dumps({})
         
         # Record the function call
@@ -937,6 +1038,10 @@ class OnnxRoboflowInferenceModel(RoboflowInferenceModel):
         )
         
         try:
+            # Update counter
+            self.__class__._trace_counter += 1
+            
+            # Execute original function
             if isinstance(image, list):
                 preproc_image = partial(
                     self.preproc_image,
@@ -952,11 +1057,7 @@ class OnnxRoboflowInferenceModel(RoboflowInferenceModel):
                 elif "torch" in dir():
                     img_in = torch.cat(imgs, dim=0)
                 else:
-                    raise ValueError(
-                        f"Received a list of images of unknown type, {type(imgs[0])}; "
-                        "This is most likely a bug. Contact Roboflow team through github issues "
-                        "(https://github.com/roboflow/inference/issues) providing full context of the problem"
-                    )
+                    raise ValueError(f"Received a list of images of unknown type, {type(imgs[0])}")
                 result = (img_in, img_dims)
             else:
                 img_in, img_dims = self.preproc_image(
@@ -972,11 +1073,24 @@ class OnnxRoboflowInferenceModel(RoboflowInferenceModel):
             # Record the return value
             t_ns_end = time.perf_counter_ns()
             try:
-                result_vars = pickle.dumps(result, protocol=pickle.HIGHEST_PROTOCOL)
+                # For return values, just record metadata about the results
+                if isinstance(img_in, np.ndarray):
+                    simple_result = {
+                        "type": "numpy.ndarray",
+                        "shape": img_in.shape,
+                        "img_dims_count": len(img_dims)
+                    }
+                else:
+                    simple_result = {
+                        "type": str(type(img_in)),
+                        "img_dims_count": len(img_dims)
+                    }
+                
+                result_vars = pickle.dumps(simple_result, protocol=pickle.HIGHEST_PROTOCOL)
             except Exception as e:
                 print(f"Warning: Failed to pickle result: {e}")
-                result_vars = pickle.dumps(("UNPICKLABLE_RESULT",))
-                
+                result_vars = pickle.dumps({"error": "Failed to pickle"})
+            
             cur.execute(
                 "INSERT INTO function_calls VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
                 (
@@ -984,8 +1098,8 @@ class OnnxRoboflowInferenceModel(RoboflowInferenceModel):
                     "load_image",
                     "OnnxRoboflowInferenceModel",
                     file_name,
-                    0,  # line number (not important)
-                    0,  # frame address (not important)
+                    0,
+                    0,
                     t_ns_end,
                     result_vars,
                 )
@@ -996,7 +1110,7 @@ class OnnxRoboflowInferenceModel(RoboflowInferenceModel):
             con.close()
             print(f"Finished tracing load_image, wrote to {trace_file}")
             return result
-            
+        
         except Exception as e:
             # Record the exception
             t_ns_end = time.perf_counter_ns()
@@ -1021,7 +1135,7 @@ class OnnxRoboflowInferenceModel(RoboflowInferenceModel):
                 con.commit()
             except Exception as e2:
                 print(f"Failed to record exception: {e2}")
-                
+            
             con.close()
             print(f"Failed tracing load_image, but wrote partial trace to {trace_file}")
             raise
