@@ -19,7 +19,8 @@ import os
 import hashlib
 from pathlib import Path
 from functools import partial
-import sys  
+import sys
+from copy import copy
 
 from inference.core.env import (
     API_KEY,
@@ -891,7 +892,7 @@ class OnnxRoboflowInferenceModel(RoboflowInferenceModel):
         ) -> Tuple[np.ndarray, Tuple[int, int]]:
         # Set up tracing with constraints
 
-        arguments = sys._getframe(0).f_locals
+        arguments = copy(sys._getframe(0).f_locals)
         onnx = arguments["self"].onnx_session
         if hasattr(arguments["self"], "onnx_session"):
             delattr(arguments["self"], "onnx_session")
