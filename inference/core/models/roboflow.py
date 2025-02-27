@@ -892,6 +892,9 @@ class OnnxRoboflowInferenceModel(RoboflowInferenceModel):
         # Set up tracing with constraints
 
         arguments = sys._getframe(0).f_locals
+        onnx = arguments["self"].onnx_session
+        delattr(arguments["self"], "onnx_session")
+
 
         # Use global tracking for traces
         if not hasattr(self.__class__, '_trace_counter'):
@@ -941,6 +944,7 @@ class OnnxRoboflowInferenceModel(RoboflowInferenceModel):
 
                 )
             )
+        self.
         # Execute original function
         if isinstance(image, list):
             preproc_image = partial(
