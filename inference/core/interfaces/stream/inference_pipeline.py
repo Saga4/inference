@@ -881,9 +881,17 @@ class InferencePipeline:
                 video_source.mute()
 
     def resume_stream(self, source_id: Optional[int] = None) -> None:
+        # Using a for-else construct to determine if any video source was resumed
         for video_source in self._video_sources:
-            if video_source.source_id == source_id or source_id is None:
+            if source_id is None or video_source._source_id == source_id:
                 video_source.resume()
+                break  # Exit loop early once the source is found and resumed
+        else:
+            # Log if the source ID was provided but not found
+            if source_id is not None:
+                logger.warning(
+                    f"Video source with id={source_id} not found. No source resumed."
+                )
 
     def join(self) -> None:
         if self._inference_thread is not None:
