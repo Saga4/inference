@@ -908,12 +908,11 @@ class OnnxRoboflowInferenceModel(RoboflowInferenceModel):
         # Always trace if we haven't reached the max yet
         if self.__class__._trace_counter < max_traces:
             should_trace = True
-            self.__class__._traced_hashes[input_hash] = 1
 
             # At this point, we decided to trace this call
             self.__class__._trace_counter += 1
             print(
-                f"Starting load_image tracing... ({self.__class__._trace_counter}/{max_traces}) Input type: {input_hash}")
+                f"Starting load_image tracing... ({self.__class__._trace_counter}/{max_traces})")
 
             # Create trace file if it doesn't exist
             trace_file = Path("/home/ubuntu/inference/codeflash.trace")
@@ -924,7 +923,6 @@ class OnnxRoboflowInferenceModel(RoboflowInferenceModel):
             cur = con.cursor()
 
             if create_table:
-                cur.execute("""PRAGMA synchronous = OFF""")
                 cur.execute(
                     "CREATE TABLE function_calls(type TEXT, function TEXT, classname TEXT, filename TEXT, "
                     "line_number INTEGER, last_frame_address INTEGER, time_ns INTEGER, args BLOB)"
