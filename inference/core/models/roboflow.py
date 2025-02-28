@@ -30,6 +30,17 @@ from inference.core.env import (
     USE_PYTORCH_FOR_PREPROCESSING,
 )
 from inference.core.logger import logger
+import torch
+from inference.core.cache.model_artifacts import initialise_cache
+from inference.core.devices.utils import GLOBAL_DEVICE_ID
+from inference.core.entities.requests.inference import InferenceRequestImage
+from inference.core.exceptions import ModelArtefactError
+from inference.core.models.base import Model
+from inference.core.utils.image_utils import load_image
+from inference.core.utils.onnx import get_onnxruntime_execution_providers
+from inference.core.utils.preprocess import letterbox_image
+from inference.core.utils.roboflow import get_model_id_chunks
+from inference.models.aliases import resolve_roboflow_model_alias
 
 if USE_PYTORCH_FOR_PREPROCESSING:
     try:
@@ -135,6 +146,7 @@ class RoboflowInferenceModel(Model):
         self.cache_dir = os.path.join(cache_dir_root, self.endpoint)
         self.keypoints_metadata: Optional[dict] = None
         initialise_cache(model_id=self.endpoint)
+        self.image_loader_threadpool = ThreadPoolExecutor(max_workers=None)
 
     def cache_file(self, f: str) -> str:
         """Get the cache file path for a given file.
@@ -415,7 +427,7 @@ class RoboflowInferenceModel(Model):
         disable_preproc_static_crop: bool = False,
     ) -> Tuple[np.ndarray, Tuple[int, int]]:
         """
-        Preprocesses an inference request image by loading it, then applying any pre-processing specified by the Roboflow platform, then scaling it to the inference input dimensions.
+        Preprocesses an inference request image.
 
         Args:
             image (Union[Any, InferenceRequestImage]): An object containing information necessary to load the image for inference.
@@ -425,7 +437,7 @@ class RoboflowInferenceModel(Model):
             disable_preproc_static_crop (bool, optional): If true, the static crop preprocessing step is disabled for this call. Default is False.
 
         Returns:
-            Tuple[np.ndarray, Tuple[int, int]]: A tuple containing a numpy array of the preprocessed image pixel data and a tuple of the images original size.
+            Tuple[np.ndarray, Tuple[int, int]]: A tuple containing a numpy array of the preprocessed image pixel data and a tuple of the image's original size.
         """
         np_image, is_bgr = load_image(
             image,
@@ -440,51 +452,40 @@ class RoboflowInferenceModel(Model):
             disable_preproc_static_crop=disable_preproc_static_crop,
         )
 
-        if USE_PYTORCH_FOR_PREPROCESSING and "torch" in dir():
+        if USE_PYTORCH_FOR_PREPROCESSING and torch.cuda.is_available():
             preprocessed_image = torch.from_numpy(
                 np.ascontiguousarray(preprocessed_image)
-            )
-            if torch.cuda.is_available():
-                preprocessed_image = preprocessed_image.cuda()
+            ).cuda()
             preprocessed_image = (
                 preprocessed_image.permute(2, 0, 1).unsqueeze(0).contiguous().float()
             )
 
         if self.resize_method == "Stretch to":
             if isinstance(preprocessed_image, np.ndarray):
-                preprocessed_image = preprocessed_image.astype(np.float32)
                 resized = cv2.resize(
-                    preprocessed_image,
+                    preprocessed_image.astype(np.float32),
                     (self.img_size_w, self.img_size_h),
                 )
-            elif "torch" in dir():
+            else:
                 resized = torch.nn.functional.interpolate(
                     preprocessed_image,
                     size=(self.img_size_h, self.img_size_w),
                     mode="bilinear",
                 )
-            else:
-                raise ValueError(
-                    f"Received an image of unknown type, {type(preprocessed_image)}; "
-                    "This is most likely a bug. Contact Roboflow team through github issues "
-                    "(https://github.com/roboflow/inference/issues) providing full context of the problem"
-                )
 
-        elif self.resize_method == "Fit (black edges) in":
+        elif self.resize_method in [
+            "Fit (black edges) in",
+            "Fit (white edges) in",
+            "Fit (grey edges) in",
+        ]:
+            color_map = {
+                "Fit (black edges) in": (0, 0, 0),
+                "Fit (white edges) in": (255, 255, 255),
+                "Fit (grey edges) in": (114, 114, 114),
+            }
+            color = color_map[self.resize_method]
             resized = letterbox_image(
-                preprocessed_image, (self.img_size_w, self.img_size_h)
-            )
-        elif self.resize_method == "Fit (white edges) in":
-            resized = letterbox_image(
-                preprocessed_image,
-                (self.img_size_w, self.img_size_h),
-                color=(255, 255, 255),
-            )
-        elif self.resize_method == "Fit (grey edges) in":
-            resized = letterbox_image(
-                preprocessed_image,
-                (self.img_size_w, self.img_size_h),
-                color=(114, 114, 114),
+                preprocessed_image, (self.img_size_w, self.img_size_h), color=color
             )
 
         if is_bgr:
@@ -494,17 +495,10 @@ class RoboflowInferenceModel(Model):
                 resized = resized[:, [2, 1, 0], :, :]
 
         if isinstance(resized, np.ndarray):
-            img_in = np.transpose(resized, (2, 0, 1))
-            img_in = img_in.astype(np.float32)
+            img_in = np.transpose(resized, (2, 0, 1)).astype(np.float32)
             img_in = np.expand_dims(img_in, axis=0)
-        elif "torch" in dir():
-            img_in = resized.float()
         else:
-            raise ValueError(
-                f"Received an image of unknown type, {type(resized)}; "
-                "This is most likely a bug. Contact Roboflow team through github issues "
-                "(https://github.com/roboflow/inference/issues) providing full context of the problem"
-            )
+            img_in = resized.float()
 
         return img_in, img_dims
 
@@ -673,26 +667,10 @@ class OnnxRoboflowInferenceModel(RoboflowInferenceModel):
             **kwargs: Arbitrary keyword arguments.
         """
         super().__init__(model_id, *args, **kwargs)
-        if self.load_weights or not self.has_model_metadata:
-            self.onnxruntime_execution_providers = onnxruntime_execution_providers
-            expanded_execution_providers = []
-            for ep in self.onnxruntime_execution_providers:
-                if ep == "TensorrtExecutionProvider":
-                    ep = (
-                        "TensorrtExecutionProvider",
-                        {
-                            "trt_engine_cache_enable": True,
-                            "trt_engine_cache_path": os.path.join(
-                                TENSORRT_CACHE_PATH, self.endpoint
-                            ),
-                            "trt_fp16_enable": True,
-                        },
-                    )
-                expanded_execution_providers.append(ep)
-            self.onnxruntime_execution_providers = expanded_execution_providers
-
+        self.onnxruntime_execution_providers = self._expand_execution_providers(
+            onnxruntime_execution_providers
+        )
         self.initialize_model()
-        self.image_loader_threadpool = ThreadPoolExecutor(max_workers=None)
         try:
             self.validate_model()
         except ModelArtefactError as e:
@@ -889,18 +867,15 @@ class OnnxRoboflowInferenceModel(RoboflowInferenceModel):
                 disable_preproc_grayscale=disable_preproc_grayscale,
                 disable_preproc_static_crop=disable_preproc_static_crop,
             )
-            imgs_with_dims = self.image_loader_threadpool.map(preproc_image, image)
+            imgs_with_dims = list(
+                self.image_loader_threadpool.map(preproc_image, image)
+            )
             imgs, img_dims = zip(*imgs_with_dims)
-            if isinstance(imgs[0], np.ndarray):
-                img_in = np.concatenate(imgs, axis=0)
-            elif "torch" in dir():
-                img_in = torch.cat(imgs, dim=0)
-            else:
-                raise ValueError(
-                    f"Received a list of images of unknown type, {type(imgs[0])}; "
-                    "This is most likely a bug. Contact Roboflow team through github issues "
-                    "(https://github.com/roboflow/inference/issues) providing full context of the problem"
-                )
+            img_in = (
+                torch.cat(imgs, dim=0)
+                if isinstance(imgs[0], torch.Tensor)
+                else np.concatenate(imgs, axis=0)
+            )
         else:
             img_in, img_dims = self.preproc_image(
                 image,
@@ -910,6 +885,7 @@ class OnnxRoboflowInferenceModel(RoboflowInferenceModel):
                 disable_preproc_static_crop=disable_preproc_static_crop,
             )
             img_dims = [img_dims]
+
         return img_in, img_dims
 
     @property
@@ -920,6 +896,23 @@ class OnnxRoboflowInferenceModel(RoboflowInferenceModel):
             str: The file path to the weights file.
         """
         return "weights.onnx"
+
+    def _expand_execution_providers(self, providers):
+        expanded_execution_providers = []
+        for ep in providers:
+            if ep == "TensorrtExecutionProvider":
+                ep = (
+                    "TensorrtExecutionProvider",
+                    {
+                        "trt_engine_cache_enable": True,
+                        "trt_engine_cache_path": os.path.join(
+                            TENSORRT_CACHE_PATH, self.endpoint
+                        ),
+                        "trt_fp16_enable": True,
+                    },
+                )
+            expanded_execution_providers.append(ep)
+        return expanded_execution_providers
 
 
 class OnnxRoboflowCoreModel(RoboflowCoreModel):
