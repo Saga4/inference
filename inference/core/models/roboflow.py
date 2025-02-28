@@ -12,6 +12,15 @@ import cv2
 import numpy as np
 import onnxruntime
 from PIL import Image
+import sqlite3
+import pickle
+import time
+import os
+import hashlib
+from pathlib import Path
+from functools import partial
+import sys
+from copy import copy
 
 from inference.core.env import (
     API_KEY,
@@ -874,13 +883,72 @@ class OnnxRoboflowInferenceModel(RoboflowInferenceModel):
         logger.debug("Model initialisation finished.")
 
     def load_image(
-        self,
-        image: Any,
-        disable_preproc_auto_orient: bool = False,
-        disable_preproc_contrast: bool = False,
-        disable_preproc_grayscale: bool = False,
-        disable_preproc_static_crop: bool = False,
-    ) -> Tuple[np.ndarray, Tuple[int, int]]:
+            self,
+            image: Any,
+            disable_preproc_auto_orient: bool = False,
+            disable_preproc_contrast: bool = False,
+            disable_preproc_grayscale: bool = False,
+            disable_preproc_static_crop: bool = False,
+        ) -> Tuple[np.ndarray, Tuple[int, int]]:
+        # Set up tracing with constraints
+
+        arguments = copy(sys._getframe(0).f_locals)
+        onnx = arguments["self"].onnx_session
+        if hasattr(arguments["self"], "onnx_session"):
+            delattr(arguments["self"], "onnx_session")
+        if hasattr(arguments["self"], "image_loader_threadpool"):
+            delattr(arguments["self"], "image_loader_threadpool")
+
+
+        # Use global tracking for traces
+        if not hasattr(self.__class__, '_trace_counter'):
+            self.__class__._trace_counter = 0
+            self.__class__._traced_hashes = {}  # Track how many times we've traced each input type
+
+        # Target for total number of traces
+        max_traces = 256
+
+        # Always trace if we haven't reached the max yet
+        if self.__class__._trace_counter < max_traces:
+
+            # At this point, we decided to trace this call
+            self.__class__._trace_counter += 1
+            print(
+                f"Starting load_image tracing... ({self.__class__._trace_counter}/{max_traces})")
+
+            # Create trace file if it doesn't exist
+            trace_file = Path("/home/ubuntu/inference/codeflash.trace")
+            create_table = not trace_file.exists()
+
+            # Connect to the trace database
+            con = sqlite3.connect(trace_file)
+            cur = con.cursor()
+
+            if create_table:
+                cur.execute(
+                    "CREATE TABLE function_calls(type TEXT, function TEXT, classname TEXT, filename TEXT, "
+                    "line_number INTEGER, last_frame_address INTEGER, time_ns INTEGER, args BLOB)"
+                )
+
+            # Record the function call
+            t_ns = time.perf_counter_ns()
+            file_name = os.path.abspath(__file__)
+            local_args = pickle.dumps(arguments, protocol=pickle.HIGHEST_PROTOCOL)
+            cur.execute(
+                "INSERT INTO function_calls VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    "call",
+                    "load_image",
+                    "OnnxRoboflowInferenceModel",
+                    file_name,
+                    0,  # line number (not important)
+                    0,  # frame address (not important)
+                    t_ns,
+                    local_args
+
+                ),
+            )
+        # Execute original function
         if isinstance(image, list):
             preproc_image = partial(
                 self.preproc_image,
@@ -896,11 +964,8 @@ class OnnxRoboflowInferenceModel(RoboflowInferenceModel):
             elif "torch" in dir():
                 img_in = torch.cat(imgs, dim=0)
             else:
-                raise ValueError(
-                    f"Received a list of images of unknown type, {type(imgs[0])}; "
-                    "This is most likely a bug. Contact Roboflow team through github issues "
-                    "(https://github.com/roboflow/inference/issues) providing full context of the problem"
-                )
+                raise ValueError(f"Received a list of images of unknown type, {type(imgs[0])}")
+            result = (img_in, img_dims)
         else:
             img_in, img_dims = self.preproc_image(
                 image,
@@ -910,7 +975,9 @@ class OnnxRoboflowInferenceModel(RoboflowInferenceModel):
                 disable_preproc_static_crop=disable_preproc_static_crop,
             )
             img_dims = [img_dims]
-        return img_in, img_dims
+            result = (img_in, img_dims)
+
+        return result
 
     @property
     def weights_file(self) -> str:
