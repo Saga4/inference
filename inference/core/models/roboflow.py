@@ -881,16 +881,40 @@ class OnnxRoboflowInferenceModel(RoboflowInferenceModel):
         disable_preproc_grayscale: bool = False,
         disable_preproc_static_crop: bool = False,
     ) -> Tuple[np.ndarray, Tuple[int, int]]:
-        if isinstance(image, list):
-            preproc_image = partial(
-                self.preproc_image,
+        """
+        Optimized load_image implementation with improved handling of single images and small batches.
+        """
+        if not isinstance(image, list) or len(image) == 1:
+            # Extract the single image if it's a list
+            img = image[0] if isinstance(image, list) else image
+            # Process it directly
+            img_in, img_dims = self.preproc_image(
+                img,
                 disable_preproc_auto_orient=disable_preproc_auto_orient,
                 disable_preproc_contrast=disable_preproc_contrast,
                 disable_preproc_grayscale=disable_preproc_grayscale,
                 disable_preproc_static_crop=disable_preproc_static_crop,
             )
-            imgs_with_dims = self.image_loader_threadpool.map(preproc_image, image)
+            # Return it as a batch of 1
+            img_dims = [img_dims]
+            return img_in, img_dims
+        # For small batches (2-4 images), avoid multiprocessing overhead
+        elif len(image) <= 4:
+            imgs_with_dims = []
+            for img in image:
+                result = self.preproc_image(
+                    img,
+                    disable_preproc_auto_orient=disable_preproc_auto_orient,
+                    disable_preproc_contrast=disable_preproc_contrast,
+                    disable_preproc_grayscale=disable_preproc_grayscale,
+                    disable_preproc_static_crop=disable_preproc_static_crop,
+                )
+                imgs_with_dims.append(result)
+            
+            # Extract images and dimensions
             imgs, img_dims = zip(*imgs_with_dims)
+            
+            # Combine into batch
             if isinstance(imgs[0], np.ndarray):
                 img_in = np.concatenate(imgs, axis=0)
             elif "torch" in dir():
@@ -902,14 +926,29 @@ class OnnxRoboflowInferenceModel(RoboflowInferenceModel):
                     "(https://github.com/roboflow/inference/issues) providing full context of the problem"
                 )
         else:
-            img_in, img_dims = self.preproc_image(
-                image,
+            # For larger batches, use the original ThreadPoolExecutor approach
+            preproc_image = partial(
+                self.preproc_image,
                 disable_preproc_auto_orient=disable_preproc_auto_orient,
                 disable_preproc_contrast=disable_preproc_contrast,
                 disable_preproc_grayscale=disable_preproc_grayscale,
                 disable_preproc_static_crop=disable_preproc_static_crop,
             )
-            img_dims = [img_dims]
+            imgs_with_dims = self.image_loader_threadpool.map(preproc_image, image)
+            imgs, img_dims = zip(*imgs_with_dims)
+            
+            # Combine into batch
+            if isinstance(imgs[0], np.ndarray):
+                img_in = np.concatenate(imgs, axis=0)
+            elif "torch" in dir():
+                img_in = torch.cat(imgs, dim=0)
+            else:
+                raise ValueError(
+                    f"Received a list of images of unknown type, {type(imgs[0])}; "
+                    "This is most likely a bug. Contact Roboflow team through github issues "
+                    "(https://github.com/roboflow/inference/issues) providing full context of the problem"
+                )
+        
         return img_in, img_dims
 
     @property
